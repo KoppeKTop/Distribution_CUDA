@@ -37,7 +37,7 @@ struct TCalcPlan
 		gpu = 0;
 
 		int param_idx, req_param_idx;
-		for (param_idx = 1, req_param_idx = 0; param_idx < argc && req_param_idx < REQUIRED_PARAMETERS_CNT; param_idx++ )
+		for (param_idx = 1, req_param_idx = 0; param_idx < argc; param_idx++ )
 		{
 			char * pch;
 			pch = strtok (argv[param_idx], "-=");
@@ -46,6 +46,10 @@ struct TCalcPlan
 			}	else if (strcmp(pch, "GPU") == 0)	{
 				pch = strtok (NULL, "-=");
 				gpu = atoi(pch);
+			}	else if (req_param_idx == REQUIRED_PARAMETERS_CNT)	{
+				fprintf(stderr, "Too much parameters\n");
+				fprintf(stderr, usage_string, argv[0]);
+				exit(23);
 			}	else	{
 				// required parameter
 				req_params_nums[req_param_idx] = param_idx;

@@ -439,6 +439,7 @@ double getVolume(const SphereVec & h_spheres, const Rect & box, double poreSize,
 
         scale[iCoord::GetDefDims()] = 1; // scale of radius
         size_t total_bytes = (size_t)total_bits/8;
+	cout << "Need memory: " << total_bytes * 3 << endl;
         cudaSafeCall(cudaMalloc(&result_fld, total_bytes));
         cudaSafeCall(cudaMemset(result_fld, 0, total_bytes));
         cudaSafeCall(cudaMalloc(&centers_fld, total_bytes));
