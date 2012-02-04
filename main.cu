@@ -383,7 +383,7 @@ int iteration(float4 * d_spheres, int spheres_cnt, int * d_fld, int * d_centers_
 	fld_cnt <<<dim_grid_map, dim_block_map>>> (d_fld, start_point, stop_point, d_cells_cnt);
 	cudaSafeCall(cudaDeviceSynchronize());
 
-	cudaSafeCall(cudaMemcpy(&result, d_cells_cnt, sizeof(int), cudaMemcpyHostToDevice));
+	cudaSafeCall(cudaMemcpy(&result, d_cells_cnt, sizeof(int), cudaMemcpyDeviceToHost));
 	cudaSafeCall(cudaFree(d_cells_cnt));
 	cudaSafeCall(cudaFree(iter_map.x));
 	cudaSafeCall(cudaFree(iter_map.y));
