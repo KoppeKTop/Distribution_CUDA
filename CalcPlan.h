@@ -12,8 +12,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <iostream>
+using namespace std;
 
 #define REQUIRED_PARAMETERS_CNT 2
+#define _TEST_PLAN_
 
 struct TCalcPlan
 {
@@ -66,6 +69,10 @@ struct TCalcPlan
 			fprintf(stderr, usage_string, argv[0]);
 			exit(22);
 		}
+
+	#ifdef _TEST_PLAN_
+		cout << filename << " " << divisions << " " << is_float << " " << gpu << endl;
+	#endif
 	}
 	// Required
 	char * filename;
