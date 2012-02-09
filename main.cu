@@ -471,24 +471,13 @@ double getVolume(const SphereVec & h_spheres, const Rect & box, double poreSize,
     return added_cells_cnt * one_cell_vol;
 }
 
-vector<double> getDistribution(const SphereVec & spheres, double minPores, double maxPores, double h, int divisions)
+vector<double> getDistribution(const SphereVec & spheres, double minPores, double maxPores, double h, int divisions
+                                double field_size)
 {
     Rect box;
-    const double BIG_NUMBER = 1e8;
-    const double SMALL_NUMBER = -BIG_NUMBER;
     for (int dim = 0; dim < iCoord::GetDefDims(); ++dim) {
-        box.minCoord[dim] = BIG_NUMBER;
-        box.maxCoord[dim] = SMALL_NUMBER;
-    }
-    for (int pnt = 0; pnt < spheres.size(); ++pnt) {
-        for (int dim = 0; dim < iCoord::GetDefDims(); ++dim) {
-            if (spheres[pnt].GetCoord(dim) - spheres[pnt].GetCoord(dCoord::GetDefDims() - 1) < box.minCoord[dim]) {
-                box.minCoord[dim] = spheres[pnt].GetCoord(dim) - spheres[pnt].GetCoord(dCoord::GetDefDims() - 1);
-            }
-            if (spheres[pnt].GetCoord(dim) + spheres[pnt].GetCoord(dCoord::GetDefDims() - 1) > box.maxCoord[dim]) {
-                box.maxCoord[dim] = spheres[pnt].GetCoord(dim) + spheres[pnt].GetCoord(dCoord::GetDefDims() - 1);
-            }
-        }
+        box.minCoord[dim] = 0;
+        box.maxCoord[dim] = field_size;
     }
     
     vector<double> result;
@@ -583,7 +572,7 @@ int main(int argc, char ** argv)
         load_coords<double>(plan.filename, &v);
     }
     
-    vector<double> distr = getDistribution(v, 1.0, 50.0, 1.0, divisions);
+    vector<double> distr = getDistribution(v, 1.0, 50.0, 1.0, divisions, plan.field_size);
     for (vector<double>::reverse_iterator curr_d = distr.rbegin(); curr_d != distr.rend(); ++curr_d) {
         cout << *curr_d << " ";
     }

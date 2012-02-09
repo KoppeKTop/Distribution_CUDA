@@ -15,7 +15,7 @@
 #include <iostream>
 using namespace std;
 
-#define REQUIRED_PARAMETERS_CNT 2
+#define REQUIRED_PARAMETERS_CNT 3
 #define _TEST_PLAN_
 
 struct TCalcPlan
@@ -25,7 +25,7 @@ struct TCalcPlan
 		// TODO: parse YAML config instead argv
 		FILE * ifile;
 		int req_params_nums[REQUIRED_PARAMETERS_CNT];
-		char usage_string[] = "Usage: %s points_file division_number [-float] [-GPU=num]\n";
+		char usage_string[] = "Usage: %s points_file division_number field_size [-float] [-GPU=num]\n";
 		
 		// 1. Must be at least 3 parameters
 		if (argc < 3) {
@@ -74,6 +74,13 @@ struct TCalcPlan
 			exit(22);
 		}
 
+		field_size = atof(argv[req_params_nums[2]]);
+		if (field_size <= 0)
+		{
+			fprintf(stderr, usage_string, argv[0]);
+			exit(24);
+		}
+
 	#ifdef _TEST_PLAN_
 		cout << filename << " " << divisions << " " << is_float << " " << gpu << endl;
 	#endif
@@ -81,6 +88,7 @@ struct TCalcPlan
 	// Required
 	char * filename;
 	int divisions;
+	double field_size;
 	// optional
     bool is_float;
     int gpu;
