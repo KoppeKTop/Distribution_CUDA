@@ -33,6 +33,12 @@ time_t time_from_start()
     return time(NULL) - start;
 }
 
+ostream& operator<<(ostream& out, dim3& x ) 
+{
+    out << "{x = " << x.x << ", y = " << x.y << ", z = " << x.z << "}";
+    return out;
+}
+
 //Round a / b to nearest higher integer value
 int iDivUp(int a, int b)
 {
@@ -76,18 +82,17 @@ __global__ void overlap_kernel(float4 * spheres, float4 test_sph, int * result)
 }
 
 // blockDim.x == 32!!!
-// blockDim.y == ints_per_line == fld_size.x / 32
+// blockDim.y == 8 (or 4 or 16...)
 // gridDim = (fld_size.y, 1)
 // need shared mem == blockDim.y * 2 * sizeof(int)
 // ont block computes 1 line in all layers
 __global__ void get_overlapping_field(int * fld, float4 * spheres, int spheres_cnt, 
-float radius, int z_cnt, float cell_len, int ints_per_line, int ints_per_layer)
+float radius, int z_cnt, float cell_len, int ints_per_line, int ints_per_layer
+)
 {
 	const int bit_cnt = threadIdx.x;
-	const int int_cnt = threadIdx.y;
 	int z = 0;
 	float4 curr_pnt;
-    curr_pnt.x = (bit_cnt + int_cnt * 32 + 0.5f) * cell_len;
     curr_pnt.y = (blockIdx.x + 0.5f) * cell_len;
     curr_pnt.z = (z + 0.5f) * cell_len;
     curr_pnt.w = radius;
@@ -102,6 +107,9 @@ float radius, int z_cnt, float cell_len, int ints_per_line, int ints_per_layer)
 	__syncthreads();
 	for (;z < z_cnt; z++, curr_pnt.z += cell_len)
 	{
+		for (int int_cnt = threadIdx.y; int_cnt < ints_per_line; int_cnt += blockDim.y)
+		{
+		curr_pnt.x = (bit_cnt + int_cnt * 32 + 0.5f) * cell_len;
 		bool overlapped = false;
 		for (int sphIdx = 0; sphIdx < spheres_cnt; ++sphIdx)
 		{
@@ -111,18 +119,23 @@ float radius, int z_cnt, float cell_len, int ints_per_line, int ints_per_layer)
 				break;
 			}
 		}
-		if (overlapped) continue;
-		atomicOr(res + threadIdx.y, 1 << (31 - threadIdx.x));
-		bool mutex_get = (atomicCAS(res + blockDim.y + threadIdx.y, 0, 1) == 0); 
+		if (overlapped) {
+			continue;
+		}
+
+		atomicOr(&res[threadIdx.y], 1 << (31 - threadIdx.x));
+		bool mutex_get = (atomicCAS(&res[blockDim.y + threadIdx.y], 0, 1) == 0); 
 		// if last element was == 0, then 
 		// it set 1 and mutex for that integer get
 		__syncthreads();
 		if (mutex_get) {
 			fld[int_cnt + blockIdx.x * ints_per_line + z * ints_per_layer] = res[threadIdx.y];
+			res[threadIdx.y] = 0;
 			//release mutex
 			res[blockDim.y + threadIdx.y] = 0;
 		}
 		__syncthreads();
+		}
 	}
 }
 
@@ -300,7 +313,7 @@ Map generate_map(double radius, double cell_len)
     for (int d = 0; d < dCoord::GetDefDims()-1; ++d) {
         centre[d] = centreCoord;
     }
-    centre[dCoord::GetDefDims()-1] = radius;
+    centre[dCoord::GetDefDims()-1] = divCnt/2.0;
 
     map = new CoordVec;
     vector<int> sz(3, divCnt);
@@ -320,14 +333,14 @@ Map generate_map(double radius, double cell_len)
     }
     std::sort(map->begin(), map->end(), compare_shifts);
     Map result;
-    int gpu_arr_sz = map->size() * sizeof(int);
+    int gpu_arr_sz = map->size() * sizeof(short);
     cudaSafeCall(cudaMalloc(&(result.x), gpu_arr_sz));
     cudaSafeCall(cudaMalloc(&(result.y), gpu_arr_sz));
     cudaSafeCall(cudaMalloc(&(result.z), gpu_arr_sz));
 
-    int * x = new int[map->size()];
-    int * y = new int[map->size()];
-    int * z = new int[map->size()];
+    short * x = new short[map->size()];
+    short * y = new short[map->size()];
+    short * z = new short[map->size()];
     for (int idx = 0; idx < map->size(); ++idx)
     {
     	x[idx] = map[0][idx][0];
@@ -338,6 +351,8 @@ Map generate_map(double radius, double cell_len)
     cudaSafeCall(cudaMemcpy(result.y, y, gpu_arr_sz, cudaMemcpyHostToDevice));
     cudaSafeCall(cudaMemcpy(result.z, z, gpu_arr_sz, cudaMemcpyHostToDevice));
     result.cnt = map->size();
+
+    cout << map->size() << " points in map\n";
 
     delete [] x;
     delete [] y;
@@ -356,7 +371,7 @@ int iteration(float4 * d_spheres, int spheres_cnt, int * d_fld, int * d_centers_
 	int total_ints = ints_per_layer * fld_size.z;
 	Map iter_map = generate_map(radius, cell_len);
 
-	dim3 dim_block_over(BIT_IN_INT, ints_per_line, 1);
+	dim3 dim_block_over(BIT_IN_INT, 8, 1);
 	dim3 dim_grid_over(fld_size.y, 1);
 	dim3 dim_block_help(THREADS_IN_HELPERS, 1, 1);
 	dim3 dim_grid_help((total_ints % dim_block_help.x == 0) ? (total_ints / dim_block_help.x) : (total_ints / dim_block_help.x + 1), 1);
@@ -366,22 +381,32 @@ int iteration(float4 * d_spheres, int spheres_cnt, int * d_fld, int * d_centers_
     int * d_cells_cnt;
     int result;
 
+
+    cout << dim_grid_over << endl;
+    cout << dim_block_over << endl;
     cudaSafeCall(cudaMalloc(&d_cells_cnt, sizeof(int)));
     cudaSafeCall(cudaMemset(d_cells_cnt, 0, sizeof(int)));
 
 	cudaSafeCall(cudaMemset(d_fld, 0, total_bytes));
+        cout << time_from_start() << " overlapping... ";
 
 	get_overlapping_field <<<dim_grid_over, dim_block_over, dim_block_over.y * 2 * sizeof(int)>>>
-	(d_fld, d_spheres, spheres_cnt, radius, fld_size.z, cell_len, ints_per_line, ints_per_layer);
+	(d_fld, d_spheres, spheres_cnt, radius, fld_size.z, cell_len, ints_per_line, ints_per_layer
+	);
 	cudaSafeCall(cudaDeviceSynchronize());
+	cout << time_from_start() << ": " << " Done\n";
 	xor_fields <<<dim_grid_help, dim_block_help>>> (d_fld, d_centers_fld, d_fld, total_ints);
 	cudaSafeCall(cudaDeviceSynchronize());
+	cout << time_from_start() << ": start apply map... ";
 	apply_map <<<dim_grid_map, dim_block_map>>> (d_fld, result_fld, iter_map, ints_per_line, ints_per_layer);
 	cudaSafeCall(cudaDeviceSynchronize());
+	cout << time_from_start() << ": Done\n";
 	or_fields <<<dim_grid_help, dim_block_help>>> (d_fld, d_centers_fld, d_centers_fld, total_ints);
 	cudaSafeCall(cudaDeviceSynchronize());
-	fld_cnt <<<dim_grid_map, dim_block_map>>> (d_fld, start_point, stop_point, d_cells_cnt);
+	cout << time_from_start() << ": counting... " ;
+	fld_cnt <<<dim_grid_map, dim_block_map>>> (result_fld, start_point, stop_point, d_cells_cnt);
 	cudaSafeCall(cudaDeviceSynchronize());
+	cout << time_from_start() << ": Done\n";
 
 	cudaSafeCall(cudaMemcpy(&result, d_cells_cnt, sizeof(int), cudaMemcpyDeviceToHost));
 	cudaSafeCall(cudaFree(d_cells_cnt));
@@ -471,7 +496,7 @@ double getVolume(const SphereVec & h_spheres, const Rect & box, double poreSize,
     return added_cells_cnt * one_cell_vol;
 }
 
-vector<double> getDistribution(const SphereVec & spheres, double minPores, double maxPores, double h, int divisions
+vector<double> getDistribution(const SphereVec & spheres, double minPores, double maxPores, double h, int divisions,
                                 double field_size)
 {
     Rect box;
