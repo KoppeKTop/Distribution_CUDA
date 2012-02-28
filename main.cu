@@ -76,9 +76,9 @@ __host__ __device__ int NumberOfSetBits(int i)
 
 __global__ void overlap_kernel(float4 * spheres, float4 test_sph, int * result)
 {
-	if (is_overlapped(spheres[threadIdx.x], test_sph)) {
-		result[threadIdx.x] = 1;
-	}
+    if (is_overlapped(spheres[threadIdx.x], test_sph)) {
+        result[threadIdx.x] = 1;
+    }
 }
 
 // blockDim.x == 32!!!
@@ -87,79 +87,81 @@ __global__ void overlap_kernel(float4 * spheres, float4 test_sph, int * result)
 // need shared mem == blockDim.y * 2 * sizeof(int)
 // ont block computes 1 line in all layers
 __global__ void get_overlapping_field(int * fld, float4 * spheres, int spheres_cnt, 
-float radius, int z_cnt, float cell_len, int ints_per_line, int ints_per_layer
+float radius, int z_cnt, float cell_len, int ints_per_line, int ints_per_layer, 
+float map_shift
 )
 {
-	const int bit_cnt = threadIdx.x;
-	int z = 0;
-	float4 curr_pnt;
-    curr_pnt.y = (blockIdx.x + 0.5f) * cell_len;
-    curr_pnt.z = (z + 0.5f) * cell_len;
+    const int bit_idx = threadIdx.x;
+    int z = 0;
+    float4 curr_pnt;
+    curr_pnt.y = (blockIdx.x + map_shift) * cell_len;
+    curr_pnt.z = (z + map_shift) * cell_len;
     curr_pnt.w = radius;
-	extern __shared__ int res []; // last element – mutex 
+    extern __shared__ int res []; // last element – mutex 
 
-	if (threadIdx.x == 0)
-	{
-		res[threadIdx.y] = 0;
-		if ( threadIdx.y == 0 )
-			res[blockDim.y] = 0;
-	}
-	__syncthreads();
-	for (;z < z_cnt; z++, curr_pnt.z += cell_len)
-	{
-		for (int int_cnt = threadIdx.y; int_cnt < ints_per_line; int_cnt += blockDim.y)
-		{
-		curr_pnt.x = (bit_cnt + int_cnt * 32 + 0.5f) * cell_len;
-		bool overlapped = false;
-		for (int sphIdx = 0; sphIdx < spheres_cnt; ++sphIdx)
-		{
-			if (is_overlapped(curr_pnt, spheres[sphIdx]))
-			{
-				overlapped = true;
-				break;
-			}
-		}
-		if (overlapped) {
-			continue;
-		}
+    if (threadIdx.x == 0)
+    {
+        res[threadIdx.y] = 0;
+        if ( threadIdx.y == 0 )
+            res[blockDim.y] = 0;
+    }
+    __syncthreads();
+    for (;z < z_cnt; z++, curr_pnt.z += cell_len)
+    {
+        for (int int_idx = threadIdx.y; int_idx < ints_per_line; int_idx += blockDim.y)
+        {
+            curr_pnt.x = (bit_idx + int_idx * 32 + map_shift) * cell_len;
+            bool overlapped = false;
+            for (int sphIdx = 0; sphIdx < spheres_cnt; ++sphIdx)
+            {
+                if (is_overlapped(curr_pnt, spheres[sphIdx]))
+                {
+                    overlapped = true;
+                    break;
+                }
+            }
+            if (overlapped) {
+                continue;
+            }
 
-		atomicOr(&res[threadIdx.y], 1 << (31 - threadIdx.x));
-		bool mutex_get = (atomicCAS(&res[blockDim.y + threadIdx.y], 0, 1) == 0); 
-		// if last element was == 0, then 
-		// it set 1 and mutex for that integer get
-		__syncthreads();
-		if (mutex_get) {
-			fld[int_cnt + blockIdx.x * ints_per_line + z * ints_per_layer] = res[threadIdx.y];
-			res[threadIdx.y] = 0;
-			//release mutex
-			res[blockDim.y + threadIdx.y] = 0;
-		}
-		__syncthreads();
-		}
-	}
+            atomicOr(&res[threadIdx.y], 1 << (31 - threadIdx.x));
+            bool mutex_get = (atomicCAS(&res[blockDim.y + threadIdx.y], 0, 1) == 0); 
+            // if last element was == 0, then 
+            // it set 1 and mutex for that integer get
+            __syncthreads();
+            if (mutex_get) {
+                fld[int_cnt + blockIdx.x * ints_per_line + z * ints_per_layer] = res[threadIdx.y];
+                res[threadIdx.y] = 0;
+                //release mutex
+                res[blockDim.y + threadIdx.y] = 0;
+            }
+            __syncthreads();
+        }
+    }
 }
 
 __global__ void xor_fields(int * fld1, int * fld2, int * dest, int cnt)
 {
-	int idx = threadIdx.x + blockIdx.x * blockDim.x;
-	if (idx < cnt)
-		dest[idx] = fld1[idx] ^ fld2[idx];
+    int idx = threadIdx.x + blockIdx.x * blockDim.x;
+    if (idx < cnt)
+        dest[idx] = fld1[idx] ^ fld2[idx];
 }
 
 __global__ void or_fields(int * fld1, int * fld2, int * dest, int cnt)
 {
-	int idx = threadIdx.x + blockIdx.x * blockDim.x;
-	if (idx < cnt)
-		dest[idx] = fld1[idx] | fld2[idx];
+    int idx = threadIdx.x + blockIdx.x * blockDim.x;
+    if (idx < cnt)
+        dest[idx] = fld1[idx] | fld2[idx];
 }
 
 struct Map
 {
-	/* data */
-	short * x;
-	short * y;
-	short * z;
-	int cnt;
+    /* data */
+    short * x;
+    short * y;
+    short * z;
+    int cnt;
+    float shift;
 };
 
 // каждый поток будет двигать один int в соответствии с картой
@@ -170,87 +172,87 @@ struct Map
 __global__ void apply_map(int * centers_fld, int * result_fld, Map map,
 int ints_per_line, int ints_per_layer)
 {
-	const int x = threadIdx.x;
-	const int y = blockIdx.x;
-	const int z = blockIdx.y;
+    const int x = threadIdx.x;
+    const int y = blockIdx.x;
+    const int z = blockIdx.y;
 
-	int new_x, new_y, new_z;
+    int new_x, new_y, new_z;
 
-	const int templ = centers_fld[x + y * ints_per_line + z * ints_per_layer];
+    const int templ = centers_fld[x + y * ints_per_line + z * ints_per_layer];
 
-	int prev_shift = 0;
-	// __shared__ int shifted_line [];
-	// shifted_line[x] = templ;
-	// if (x == 0)
-	// {
-	// 	shifted_line[blockDim.x] = 0;
-	// }
-	// __syncthreads();
+    int prev_shift = 0;
+    // __shared__ int shifted_line [];
+    // shifted_line[x] = templ;
+    // if (x == 0)
+    // {
+    //  shifted_line[blockDim.x] = 0;
+    // }
+    // __syncthreads();
 
-	if (templ == 0)
-	{
-		return; // nothing to move
-	}
+    if (templ == 0)
+    {
+        return; // nothing to move
+    }
 
-	int bit_shift = 0;
-	int int_shift = 0;
-	int first_int = 0;
-	int second_int = 0;
+    int bit_shift = 0;
+    int int_shift = 0;
+    int first_int = 0;
+    int second_int = 0;
 
-	for (int curr_map_idx = 0; curr_map_idx < map.cnt; curr_map_idx++)
-	{
-		int shift = map.x[curr_map_idx];
-		bool neg_shift = false;
-		if (shift < 0)
-		{
-			neg_shift = true;
-			shift = -shift;
-		}
-		int_shift = (int) shift / 32;
-		bit_shift = shift - int_shift * 32;
-		if (bit_shift != prev_shift)
-		{
-			if (neg_shift)
-			{
-				// shift right
-				first_int = templ << bit_shift;
-				second_int = templ >> (32 - bit_shift);
-			} else if (int_shift != 0) {
-				first_int = templ >> bit_shift;
-				second_int = templ << (32 - bit_shift);
-			} else {
-				first_int = templ;
-				second_int = 0;
-			}
-		}
-		if (neg_shift)
-		{
-			new_x = x - int_shift;
-			new_y = y + map.y[curr_map_idx];
-			new_z = z + map.z[curr_map_idx];
-			if (0 <= new_x && 0 <= new_y && new_y < gridDim.x && 
-				0 <= new_z && new_z < gridDim.y)
-			{
-				atomicOr(result_fld + new_x + new_y * ints_per_line + new_z * ints_per_layer, first_int);
-				new_x -= 1;
-				if (0 <= new_x) {
-					atomicOr(result_fld + new_x + new_y * ints_per_line + new_z * ints_per_layer, second_int);
-				}
-			}
-		} else {
-			new_x = x + int_shift;
-			new_y = y + map.y[curr_map_idx];
-			new_z = z + map.z[curr_map_idx];
-			if ( new_x < ints_per_line && 0 <= new_y && new_y < gridDim.x && 0 <= new_z && new_z < gridDim.y)
-			{
-				atomicOr(result_fld + new_x + new_y * ints_per_line + new_z * ints_per_layer, first_int);
-				new_x += 1;
-				if (new_x < ints_per_line) {
-					atomicOr(result_fld + new_x + new_y * ints_per_line + new_z * ints_per_layer, second_int);
-				}
-			}
-		}
-	}
+    for (int curr_map_idx = 0; curr_map_idx < map.cnt; curr_map_idx++)
+    {
+        int shift = map.x[curr_map_idx];
+        bool neg_shift = false;
+        if (shift < 0)
+        {
+            neg_shift = true;
+            shift = -shift;
+        }
+        int_shift = (int) shift / 32;
+        bit_shift = shift - int_shift * 32;
+        if (bit_shift != prev_shift)
+        {
+            if (neg_shift)
+            {
+                // shift right
+                first_int = templ << bit_shift;
+                second_int = templ >> (32 - bit_shift);
+            } else if (int_shift != 0) {
+                first_int = templ >> bit_shift;
+                second_int = templ << (32 - bit_shift);
+            } else {
+                first_int = templ;
+                second_int = 0;
+            }
+        }
+        if (neg_shift)
+        {
+            new_x = x - int_shift;
+            new_y = y + map.y[curr_map_idx];
+            new_z = z + map.z[curr_map_idx];
+            if (0 <= new_x && 0 <= new_y && new_y < gridDim.x && 
+                0 <= new_z && new_z < gridDim.y)
+            {
+                atomicOr(result_fld + new_x + new_y * ints_per_line + new_z * ints_per_layer, first_int);
+                new_x -= 1;
+                if (0 <= new_x) {
+                    atomicOr(result_fld + new_x + new_y * ints_per_line + new_z * ints_per_layer, second_int);
+                }
+            }
+        } else {
+            new_x = x + int_shift;
+            new_y = y + map.y[curr_map_idx];
+            new_z = z + map.z[curr_map_idx];
+            if ( new_x < ints_per_line && 0 <= new_y && new_y < gridDim.x && 0 <= new_z && new_z < gridDim.y)
+            {
+                atomicOr(result_fld + new_x + new_y * ints_per_line + new_z * ints_per_layer, first_int);
+                new_x += 1;
+                if (new_x < ints_per_line) {
+                    atomicOr(result_fld + new_x + new_y * ints_per_line + new_z * ints_per_layer, second_int);
+                }
+            }
+        }
+    }
 }
 
 // считаем количество взведённых бит на поле
@@ -258,45 +260,45 @@ int ints_per_line, int ints_per_layer)
 // количество блоков: fld_size.y, fld_size.z
 __global__ void fld_cnt(int * fld, dim3 start_point, dim3 stop_point, int * result)
 {
-	const int start_x = threadIdx.x * 32;
-	const int stop_x = start_x + 31;
-	
-	__shared__ int bits_in_line;
-	if (threadIdx.x == 0)
-	{
-		bits_in_line = 0;
-	}
-	__syncthreads();
+    const int start_x = threadIdx.x * 32;
+    const int stop_x = start_x + 31;
+    
+    __shared__ int bits_in_line;
+    if (threadIdx.x == 0)
+    {
+        bits_in_line = 0;
+    }
+    __syncthreads();
 
-	if (stop_x < start_point.x || blockIdx.x < start_point.y || blockIdx.y < start_point.z || 
-		start_x > stop_point.x || blockIdx.x > stop_point.y || blockIdx.y > stop_point.z )
-	{
-		return;
-	}
+    if (stop_x < start_point.x || blockIdx.x < start_point.y || blockIdx.y < start_point.z || 
+        start_x > stop_point.x || blockIdx.x > stop_point.y || blockIdx.y > stop_point.z )
+    {
+        return;
+    }
 
-	int current_val = fld[threadIdx.x + blockIdx.x * blockDim.x + blockIdx.y * blockDim.x * gridDim.x];
-	if (current_val == 0)
-	{
-		return;
-	}
+    int current_val = fld[threadIdx.x + blockIdx.x * blockDim.x + blockIdx.y * blockDim.x * gridDim.x];
+    if (current_val == 0)
+    {
+        return;
+    }
 
-	if (start_x < start_point.x && start_point.x <= stop_x)
-	{
-		current_val &= 0xFFFFFFFF << (start_point.x - start_x);
+    if (start_x < start_point.x && start_point.x <= stop_x)
+    {
+        current_val &= 0xFFFFFFFF << (start_point.x - start_x);
 
-	} else if (start_x <= stop_point.x && stop_point.x < stop_x)
-	{
-		current_val &= 0xFFFFFFFF >> (stop_x - stop_point.x);
-	}
+    } else if (start_x <= stop_point.x && stop_point.x < stop_x)
+    {
+        current_val &= 0xFFFFFFFF >> (stop_x - stop_point.x);
+    }
 
-	atomicAdd(&bits_in_line, NumberOfSetBits(current_val));
-	__syncthreads();
-	atomicAdd(result, bits_in_line);
+    atomicAdd(&bits_in_line, NumberOfSetBits(current_val));
+    __syncthreads();
+    atomicAdd(result, bits_in_line);
 }
 
 bool compare_shifts(const iCoord & first, const iCoord & second)
 {
-	return (first[0] % 32) < (second[0] % 32);
+    return (first[0] % 32) < (second[0] % 32);
 }
 
 // generates map and stores it in GPU
@@ -310,6 +312,7 @@ Map generate_map(double radius, double cell_len)
     dCoord centre;
     int divCnt = ceil(radius/cell_len);
     double centreCoord = divCnt / 2.0;
+    
     for (int d = 0; d < dCoord::GetDefDims()-1; ++d) {
         centre[d] = centreCoord;
     }
@@ -343,14 +346,15 @@ Map generate_map(double radius, double cell_len)
     short * z = new short[map->size()];
     for (int idx = 0; idx < map->size(); ++idx)
     {
-    	x[idx] = map[0][idx][0];
-    	y[idx] = map[0][idx][1];
-    	z[idx] = map[0][idx][2];
+        x[idx] = map[0][idx][0];
+        y[idx] = map[0][idx][1];
+        z[idx] = map[0][idx][2];
     }
     cudaSafeCall(cudaMemcpy(result.x, x, gpu_arr_sz, cudaMemcpyHostToDevice));
     cudaSafeCall(cudaMemcpy(result.y, y, gpu_arr_sz, cudaMemcpyHostToDevice));
     cudaSafeCall(cudaMemcpy(result.z, z, gpu_arr_sz, cudaMemcpyHostToDevice));
     result.cnt = map->size();
+    result.shift = (divCnt % 2) * 0.5f;
 
     cout << map->size() << " points in map\n";
 
@@ -362,21 +366,21 @@ Map generate_map(double radius, double cell_len)
 }
 
 int iteration(float4 * d_spheres, int spheres_cnt, int * d_fld, int * d_centers_fld, 
-				const dim3 & fld_size, double radius, double cell_len, int * result_fld,
-				dim3 start_point, dim3 stop_point)
+                const dim3 & fld_size, double radius, double cell_len, int * result_fld,
+                dim3 start_point, dim3 stop_point)
 {
-	int ints_per_line = fld_size.x/BIT_IN_INT;
-	int ints_per_layer = ints_per_line * fld_size.y;
-	int total_bytes = fld_size.x * fld_size.y * fld_size.z / 8;
-	int total_ints = ints_per_layer * fld_size.z;
-	Map iter_map = generate_map(radius, cell_len);
+    int ints_per_line = fld_size.x/BIT_IN_INT;
+    int ints_per_layer = ints_per_line * fld_size.y;
+    int total_bytes = fld_size.x * fld_size.y * fld_size.z / 8;
+    int total_ints = ints_per_layer * fld_size.z;
+    Map iter_map = generate_map(radius, cell_len);
 
-	dim3 dim_block_over(BIT_IN_INT, 8, 1);
-	dim3 dim_grid_over(fld_size.y, 1);
-	dim3 dim_block_help(THREADS_IN_HELPERS, 1, 1);
-	dim3 dim_grid_help((total_ints % dim_block_help.x == 0) ? (total_ints / dim_block_help.x) : (total_ints / dim_block_help.x + 1), 1);
-	dim3 dim_block_map(ints_per_line, 1, 1);
-	dim3 dim_grid_map(fld_size.y, fld_size.z);
+    dim3 dim_block_over(BIT_IN_INT, 8, 1);
+    dim3 dim_grid_over(fld_size.y, 1);
+    dim3 dim_block_help(THREADS_IN_HELPERS, 1, 1);
+    dim3 dim_grid_help((total_ints % dim_block_help.x == 0) ? (total_ints / dim_block_help.x) : (total_ints / dim_block_help.x + 1), 1);
+    dim3 dim_block_map(ints_per_line, 1, 1);
+    dim3 dim_grid_map(fld_size.y, fld_size.z);
 
     int * d_cells_cnt;
     int result;
@@ -387,34 +391,34 @@ int iteration(float4 * d_spheres, int spheres_cnt, int * d_fld, int * d_centers_
     cudaSafeCall(cudaMalloc(&d_cells_cnt, sizeof(int)));
     cudaSafeCall(cudaMemset(d_cells_cnt, 0, sizeof(int)));
 
-	cudaSafeCall(cudaMemset(d_fld, 0, total_bytes));
-        cout << time_from_start() << " overlapping... ";
+    cudaSafeCall(cudaMemset(d_fld, 0, total_bytes));
+        cout << time_from_start() << ": overlapping... ";
 
-	get_overlapping_field <<<dim_grid_over, dim_block_over, dim_block_over.y * 2 * sizeof(int)>>>
-	(d_fld, d_spheres, spheres_cnt, radius, fld_size.z, cell_len, ints_per_line, ints_per_layer
-	);
-	cudaSafeCall(cudaDeviceSynchronize());
-	cout << time_from_start() << ": " << " Done\n";
-	xor_fields <<<dim_grid_help, dim_block_help>>> (d_fld, d_centers_fld, d_fld, total_ints);
-	cudaSafeCall(cudaDeviceSynchronize());
-	cout << time_from_start() << ": start apply map... ";
-	apply_map <<<dim_grid_map, dim_block_map>>> (d_fld, result_fld, iter_map, ints_per_line, ints_per_layer);
-	cudaSafeCall(cudaDeviceSynchronize());
-	cout << time_from_start() << ": Done\n";
-	or_fields <<<dim_grid_help, dim_block_help>>> (d_fld, d_centers_fld, d_centers_fld, total_ints);
-	cudaSafeCall(cudaDeviceSynchronize());
-	cout << time_from_start() << ": counting... " ;
-	fld_cnt <<<dim_grid_map, dim_block_map>>> (result_fld, start_point, stop_point, d_cells_cnt);
-	cudaSafeCall(cudaDeviceSynchronize());
-	cout << time_from_start() << ": Done\n";
+    get_overlapping_field <<<dim_grid_over, dim_block_over, dim_block_over.y * 2 * sizeof(int)>>>
+    (d_fld, d_spheres, spheres_cnt, radius, fld_size.z, cell_len, ints_per_line, ints_per_layer
+    iter_map.shift);
+    cudaSafeCall(cudaDeviceSynchronize());
+    cout << time_from_start() << ": " << " Done\n";
+    xor_fields <<<dim_grid_help, dim_block_help>>> (d_fld, d_centers_fld, d_fld, total_ints);
+    cudaSafeCall(cudaDeviceSynchronize());
+    cout << time_from_start() << ": start apply map... ";
+    apply_map <<<dim_grid_map, dim_block_map>>> (d_fld, result_fld, iter_map, ints_per_line, ints_per_layer);
+    cudaSafeCall(cudaDeviceSynchronize());
+    cout << time_from_start() << ": Done\n";
+    or_fields <<<dim_grid_help, dim_block_help>>> (d_fld, d_centers_fld, d_centers_fld, total_ints);
+    cudaSafeCall(cudaDeviceSynchronize());
+    cout << time_from_start() << ": counting... " ;
+    fld_cnt <<<dim_grid_map, dim_block_map>>> (result_fld, start_point, stop_point, d_cells_cnt);
+    cudaSafeCall(cudaDeviceSynchronize());
+    cout << time_from_start() << ": Done\n";
 
-	cudaSafeCall(cudaMemcpy(&result, d_cells_cnt, sizeof(int), cudaMemcpyDeviceToHost));
-	cudaSafeCall(cudaFree(d_cells_cnt));
-	cudaSafeCall(cudaFree(iter_map.x));
-	cudaSafeCall(cudaFree(iter_map.y));
-	cudaSafeCall(cudaFree(iter_map.z));
+    cudaSafeCall(cudaMemcpy(&result, d_cells_cnt, sizeof(int), cudaMemcpyDeviceToHost));
+    cudaSafeCall(cudaFree(d_cells_cnt));
+    cudaSafeCall(cudaFree(iter_map.x));
+    cudaSafeCall(cudaFree(iter_map.y));
+    cudaSafeCall(cudaFree(iter_map.z));
 
-	return result;
+    return result;
 }
 
 double getVolume(const SphereVec & h_spheres, const Rect & box, double poreSize, double sq_len)
@@ -464,7 +468,7 @@ double getVolume(const SphereVec & h_spheres, const Rect & box, double poreSize,
 
         scale[iCoord::GetDefDims()] = 1; // scale of radius
         size_t total_bytes = (size_t)total_bits/8;
-	cout << "Need memory: " << total_bytes * 3 << endl;
+    cout << "Need memory: " << total_bytes * 3 << endl;
         cudaSafeCall(cudaMalloc(&result_fld, total_bytes));
         cudaSafeCall(cudaMemset(result_fld, 0, total_bytes));
         cudaSafeCall(cudaMalloc(&centers_fld, total_bytes));
@@ -477,17 +481,17 @@ double getVolume(const SphereVec & h_spheres, const Rect & box, double poreSize,
 
         for (int i = 0; i < h_spheres.size(); ++i)
         {
-        	h_spheres_floats[i] = make_float4(h_spheres[i][0], h_spheres[i][1], h_spheres[i][2], h_spheres[i][3]);
+            h_spheres_floats[i] = make_float4(h_spheres[i][0], h_spheres[i][1], h_spheres[i][2], h_spheres[i][3]);
         }
         cudaSafeCall(cudaMalloc(&d_spheres, h_spheres.size() * sizeof(float4)));
         cudaSafeCall(cudaMemcpy(d_spheres, h_spheres_floats, h_spheres.size() * sizeof(float4), 
-        			cudaMemcpyHostToDevice));
+                    cudaMemcpyHostToDevice));
         delete [] h_spheres_floats;
     }
     
     int cells_cnt = iteration(d_spheres, h_spheres.size(), curr_centers_fld, centers_fld, 
-								fld_dim, radius, sq_len, result_fld, 
-								start_point, stop_point);
+                                fld_dim, radius, sq_len, result_fld, 
+                                start_point, stop_point);
 
     double one_cell_vol = pow(sq_len, iCoord::GetDefDims());
 
