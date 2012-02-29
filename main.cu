@@ -130,7 +130,7 @@ float map_shift
             // it set 1 and mutex for that integer get
             __syncthreads();
             if (mutex_get) {
-                fld[int_cnt + blockIdx.x * ints_per_line + z * ints_per_layer] = res[threadIdx.y];
+                fld[int_idx + blockIdx.x * ints_per_line + z * ints_per_layer] = res[threadIdx.y];
                 res[threadIdx.y] = 0;
                 //release mutex
                 res[blockDim.y + threadIdx.y] = 0;
@@ -395,7 +395,7 @@ int iteration(float4 * d_spheres, int spheres_cnt, int * d_fld, int * d_centers_
         cout << time_from_start() << ": overlapping... ";
 
     get_overlapping_field <<<dim_grid_over, dim_block_over, dim_block_over.y * 2 * sizeof(int)>>>
-    (d_fld, d_spheres, spheres_cnt, radius, fld_size.z, cell_len, ints_per_line, ints_per_layer
+    (d_fld, d_spheres, spheres_cnt, radius, fld_size.z, cell_len, ints_per_line, ints_per_layer,
     iter_map.shift);
     cudaSafeCall(cudaDeviceSynchronize());
     cout << time_from_start() << ": " << " Done\n";
@@ -450,7 +450,7 @@ double getVolume(const SphereVec & h_spheres, const Rect & box, double poreSize,
 
         int ignore = (int) poreSize/sq_len/2.0;
         stop_point.x = fld_size[0] - ignore;
-        
+
         fld_size[0] = iAlignUp(fld_size[0], 32);
 
         fld_dim.x = fld_size[0];
@@ -512,7 +512,8 @@ vector<double> getDistribution(const SphereVec & spheres, double minPores, doubl
     }
     
     vector<double> result;
-    double sq_len = min(h, minPores/divisions);
+    // double sq_len = min(h, minPores/divisions);
+    double sq_len = 0.6830127;
     
     vector<double> poreSizes;
     for (double poreSize = minPores; poreSize <= maxPores; poreSize += h) {
@@ -603,7 +604,7 @@ int main(int argc, char ** argv)
         load_coords<double>(plan.filename, &v);
     }
     
-    vector<double> distr = getDistribution(v, 1.0, 50.0, 1.0, divisions, plan.field_size);
+    vector<double> distr = getDistribution(v, 4.0, 3.5, 1.0, divisions, plan.field_size);
     for (vector<double>::reverse_iterator curr_d = distr.rbegin(); curr_d != distr.rend(); ++curr_d) {
         cout << *curr_d << " ";
     }
