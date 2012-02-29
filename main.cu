@@ -447,6 +447,10 @@ double getVolume(const SphereVec & h_spheres, const Rect & box, double poreSize,
             zero_pnt[dim] = box.minCoord[dim];
             scale[dim] = sq_len;
         }
+
+        int ignore = (int) poreSize/sq_len/2.0;
+        stop_point.x = fld_size[0] - ignore;
+        
         fld_size[0] = iAlignUp(fld_size[0], 32);
 
         fld_dim.x = fld_size[0];
@@ -457,18 +461,16 @@ double getVolume(const SphereVec & h_spheres, const Rect & box, double poreSize,
             total_bits *= fld_size[dim];
         }
 
-        int ignore = (int) poreSize/sq_len/2.0;
         start_point.x = ignore;
         start_point.y = ignore;
         start_point.z = ignore;
 
-        stop_point.x = fld_dim.x - ignore;
         stop_point.y = fld_dim.y - ignore;
         stop_point.z = fld_dim.z - ignore;
 
         scale[iCoord::GetDefDims()] = 1; // scale of radius
         size_t total_bytes = (size_t)total_bits/8;
-    cout << "Need memory: " << total_bytes * 3 << endl;
+        cout << "Need memory: " << total_bytes * 3 << endl;
         cudaSafeCall(cudaMalloc(&result_fld, total_bytes));
         cudaSafeCall(cudaMemset(result_fld, 0, total_bytes));
         cudaSafeCall(cudaMalloc(&centers_fld, total_bytes));
