@@ -604,7 +604,7 @@ int main(int argc, char ** argv)
         load_coords<double>(plan.filename, &v);
     }
     
-    vector<double> distr = getDistribution(v, 4.0, 3.5, 1.0, divisions, plan.field_size);
+    vector<double> distr = getDistribution(v, 4.0, 4.5, 1.0, divisions, plan.field_size);
     for (vector<double>::reverse_iterator curr_d = distr.rbegin(); curr_d != distr.rend(); ++curr_d) {
         cout << *curr_d << " ";
     }
