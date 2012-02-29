@@ -308,7 +308,7 @@ Map generate_map(double radius, double cell_len)
     CoordVec * map = NULL;
     
     dCoord centre;
-    int divCnt = ceil(radius/cell_len);
+    int divCnt = ceil(2.0 * radius / cell_len);
     double centreCoord = divCnt / 2.0;
     for (int d = 0; d < dCoord::GetDefDims()-1; ++d) {
         centre[d] = centreCoord;
