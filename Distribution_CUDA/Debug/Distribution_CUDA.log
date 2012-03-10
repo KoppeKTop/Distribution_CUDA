@@ -1,0 +1,54 @@
+﻿Build started 03.03.2012 11:20:21.
+     1>Project "c:\Users\calcadmin\documents\Projects\Distribution_CUDA\Distribution_CUDA\Distribution_CUDA.vcxproj" on node 2 (build target(s)).
+     1>InitializeBuildStatus:
+         Touching "Debug\Distribution_CUDA.unsuccessfulbuild".
+       AddCudaCompileDeps:
+         C:\Program Files (x86)\Microsoft Visual Studio 10.0\VC\bin\cl.exe /E /nologo /showIncludes /TP /D__CUDACC__ /I"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v4.1\bin" /I"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v4.1\include" /I. /FIcuda_runtime.h /c c:\Users\calcadmin\documents\Projects\Distribution_CUDA\Distribution_CUDA\kernel.cu 
+       AddCudaCompilePropsDeps:
+       Skipping target "AddCudaCompilePropsDeps" because all output files are up-to-date with respect to the input files.
+       CudaBuild:
+         Compiling CUDA source file kernel.cu...
+         cmd.exe /C "C:\Users\calcadmin\AppData\Local\Temp\2\1ced8ce4b78e4be7bfcb3c8562871e97.cmd"
+         "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v4.1\bin\nvcc.exe" -gencode=arch=compute_20,code=\"sm_20,compute_20\" --use-local-env --cl-version 2010 -ccbin "C:\Program Files (x86)\Microsoft Visual Studio 10.0\VC\bin"  -I"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v4.1\include"  -G0  --keep-dir "Debug" -maxrregcount=0  --machine 32 --compile  -g    -Xcompiler "/EHsc /nologo /Od /Zi  /MDd " -o "Debug\kernel.cu.obj" "c:\Users\calcadmin\documents\Projects\Distribution_CUDA\Distribution_CUDA\kernel.cu"
+         
+         c:\Users\calcadmin\documents\Projects\Distribution_CUDA\Distribution_CUDA>"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v4.1\bin\nvcc.exe" -gencode=arch=compute_20,code=\"sm_20,compute_20\" --use-local-env --cl-version 2010 -ccbin "C:\Program Files (x86)\Microsoft Visual Studio 10.0\VC\bin"  -I"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v4.1\include"  -G0  --keep-dir "Debug" -maxrregcount=0  --machine 32 --compile  -g    -Xcompiler "/EHsc /nologo /Od /Zi  /MDd " -o "Debug\kernel.cu.obj" "c:\Users\calcadmin\documents\Projects\Distribution_CUDA\Distribution_CUDA\kernel.cu" 
+         kernel.cu
+         tmpxft_00001040_00000000-0_kernel.cudafe1.gpu
+         tmpxft_00001040_00000000-5_kernel.cudafe2.gpu
+         kernel.cu
+         tmpxft_00001040_00000000-0_kernel.cudafe1.cpp
+         tmpxft_00001040_00000000-11_kernel.ii
+       ClCompile:
+         C:\Program Files (x86)\Microsoft Visual Studio 10.0\VC\bin\CL.exe /c /I"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v4.1\include" /ZI /nologo /W3 /WX- /Od /Oy- /D _MBCS /Gm /EHsc /RTC1 /MDd /GS /fp:precise /Zc:wchar_t /Zc:forScope /Fo"Debug\\" /Fd"Debug\vc100.pdb" /Gd /TP /analyze- /errorReport:prompt Indexer.cpp
+         Indexer.cpp
+     1>c:\users\calcadmin\documents\projects\distribution_cuda\distribution_cuda\indexer.cpp(25): warning C4018: '<' : signed/unsigned mismatch
+       ManifestResourceCompile:
+         C:\Program Files (x86)\Microsoft SDKs\Windows\v7.0A\bin\rc.exe /nologo /fo"Debug\Distribution_CUDA.exe.embed.manifest.res" Debug\Distribution_CUDA_manifest.rc 
+       Link:
+         C:\Program Files (x86)\Microsoft Visual Studio 10.0\VC\bin\link.exe /ERRORREPORT:PROMPT /OUT:"c:\users\calcadmin\documents\Projects\Distribution_CUDA\Debug\Distribution_CUDA.exe" /INCREMENTAL /NOLOGO /LIBPATH:"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v4.1\lib\Win32" cudart.lib kernel32.lib user32.lib gdi32.lib winspool.lib comdlg32.lib advapi32.lib shell32.lib ole32.lib oleaut32.lib uuid.lib odbc32.lib odbccp32.lib kernel32.lib user32.lib gdi32.lib winspool.lib comdlg32.lib advapi32.lib shell32.lib ole32.lib oleaut32.lib uuid.lib odbc32.lib odbccp32.lib /MANIFEST /ManifestFile:"Debug\Distribution_CUDA.exe.intermediate.manifest" /MANIFESTUAC:"level='asInvoker' uiAccess='false'" /DEBUG /PDB:"c:\users\calcadmin\documents\Projects\Distribution_CUDA\Debug\Distribution_CUDA.pdb" /SUBSYSTEM:CONSOLE /TLBID:1 /DYNAMICBASE /NXCOMPAT /IMPLIB:"c:\users\calcadmin\documents\Projects\Distribution_CUDA\Debug\Distribution_CUDA.lib" /MACHINE:X86 Debug\kernel.cu.obj
+         Debug\Distribution_CUDA.exe.embed.manifest.res
+         Debug\Indexer.obj
+       Manifest:
+         C:\Program Files (x86)\Microsoft SDKs\Windows\v7.0A\bin\mt.exe /nologo /verbose /out:"Debug\Distribution_CUDA.exe.embed.manifest" /manifest Debug\Distribution_CUDA.exe.intermediate.manifest
+         C:\Program Files (x86)\Microsoft SDKs\Windows\v7.0A\bin\rc.exe /nologo /fo"Debug\Distribution_CUDA.exe.embed.manifest.res" Debug\Distribution_CUDA_manifest.rc 
+       LinkEmbedManifest:
+         C:\Program Files (x86)\Microsoft Visual Studio 10.0\VC\bin\link.exe /ERRORREPORT:PROMPT /OUT:"c:\users\calcadmin\documents\Projects\Distribution_CUDA\Debug\Distribution_CUDA.exe" /INCREMENTAL /NOLOGO /LIBPATH:"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v4.1\lib\Win32" cudart.lib kernel32.lib user32.lib gdi32.lib winspool.lib comdlg32.lib advapi32.lib shell32.lib ole32.lib oleaut32.lib uuid.lib odbc32.lib odbccp32.lib kernel32.lib user32.lib gdi32.lib winspool.lib comdlg32.lib advapi32.lib shell32.lib ole32.lib oleaut32.lib uuid.lib odbc32.lib odbccp32.lib /MANIFEST /ManifestFile:"Debug\Distribution_CUDA.exe.intermediate.manifest" /MANIFESTUAC:"level='asInvoker' uiAccess='false'" /DEBUG /PDB:"c:\users\calcadmin\documents\Projects\Distribution_CUDA\Debug\Distribution_CUDA.pdb" /SUBSYSTEM:CONSOLE /TLBID:1 /DYNAMICBASE /NXCOMPAT /IMPLIB:"c:\users\calcadmin\documents\Projects\Distribution_CUDA\Debug\Distribution_CUDA.lib" /MACHINE:X86 Debug\kernel.cu.obj
+         Debug\Distribution_CUDA.exe.embed.manifest.res
+         Debug\Indexer.obj
+         Distribution_CUDA.vcxproj -> c:\users\calcadmin\documents\Projects\Distribution_CUDA\Debug\Distribution_CUDA.exe
+       PostBuildEvent:
+         echo copy "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v4.1\bin\cudart*.dll" "c:\users\calcadmin\documents\Projects\Distribution_CUDA\Debug\"
+         copy "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v4.1\bin\cudart*.dll" "c:\users\calcadmin\documents\Projects\Distribution_CUDA\Debug\"
+         :VCEnd
+         copy "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v4.1\bin\cudart*.dll" "c:\users\calcadmin\documents\Projects\Distribution_CUDA\Debug\"
+         C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v4.1\bin\cudart32_41_28.dll
+         C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v4.1\bin\cudart64_41_28.dll
+                 2 file(s) copied.
+       FinalizeBuildStatus:
+         Deleting file "Debug\Distribution_CUDA.unsuccessfulbuild".
+         Touching "Debug\Distribution_CUDA.lastbuildstate".
+     1>Done Building Project "c:\Users\calcadmin\documents\Projects\Distribution_CUDA\Distribution_CUDA\Distribution_CUDA.vcxproj" (build target(s)).
+
+Build succeeded.
+
+Time Elapsed 00:00:13.43
