@@ -15,22 +15,22 @@
 #include <iostream>
 using namespace std;
 
-#define REQUIRED_PARAMETERS_CNT 2
+#define REQUIRED_PARAMETERS_CNT 6
 #define _TEST_PLAN_
 
 struct TCalcPlan
 {
-	TCalcPlan(int argc, char ** argv)
+	int Init(int argc, char ** argv)
 	{
 		// TODO: parse YAML config instead argv
-		FILE * ifile;
+		FILE * ifile = NULL;
 		int req_params_nums[REQUIRED_PARAMETERS_CNT];
-		char usage_string[] = "Usage: %s points_file division_number [-float] [-GPU=num]\n";
-		
+		char usage_string[] = "Usage: %s points_file division_number field_size min_r max_r step [-float] [-GPU=num]\n";
+		int result = 0;
 		// 1. Must be at least 3 parameters
 		if (argc < 3) {
-			fprintf(stderr, usage_string, argv[0]);
-			exit(20);
+			result = 20;
+			goto wrong_args;
 		}
 
 		is_float = false;
@@ -48,8 +48,8 @@ struct TCalcPlan
 				gpu = atoi(pch);
 			}	else if (req_param_idx == REQUIRED_PARAMETERS_CNT)	{
 				fprintf(stderr, "Too much parameters\n");
-				fprintf(stderr, usage_string, argv[0]);
-				exit(23);
+				result = 23;
+				goto wrong_args;
 			}	else	{
 				// required parameter
 				req_params_nums[req_param_idx] = param_idx;
@@ -62,28 +62,71 @@ struct TCalcPlan
 		ifile = fopen(filename, "rb");
 		if (!ifile) {
 			fprintf(stderr, "No such file: %s\n", filename);
-			fprintf(stderr, usage_string, argv[0]);
-			exit(21);
+			
+			result = 21;
+			goto wrong_args;
 		}
 		fclose(ifile);
 		
 		// 3. Divisions number must be valid
 		divisions = atoi(argv[req_params_nums[1]]);
 		if (divisions <= 0) {
-			fprintf(stderr, usage_string, argv[0]);
-			exit(22);
+			result = 22;
+			goto wrong_args;
 		}
 
+		field_size = atof(argv[req_params_nums[2]]);
+		if (field_size <= 0)
+		{
+			result = 24;
+			goto wrong_args;
+		}
+
+		min_r = atof(argv[req_params_nums[3]]);
+		if (min_r <= 0)
+		{
+			result = 25;
+			goto wrong_args;
+		}
+
+		max_r = atof(argv[req_params_nums[4]]);
+		if (max_r <= 0)
+		{
+			result = 26;
+			goto wrong_args;
+		}
+
+		step = atof(argv[req_params_nums[5]]);
+		if (step <= 0)
+		{
+			result = 27;
+			goto wrong_args;
+		}
+
+		is_initialized = true;
+
 	#ifdef _TEST_PLAN_
-		cout << filename << " " << divisions << " " << is_float << " " << gpu << endl;
+		cout << filename << " " << divisions << " " << field_size << " " 
+			<< min_r << " " << max_r << " " << step << " " << is_float << " " << gpu << endl;
 	#endif
+		return result;
+wrong_args:
+		fprintf(stderr, usage_string, argv[0]);
+		fprintf(stderr, "Error #%d\n", result);
+		return result;
 	}
 	// Required
 	char * filename;
 	int divisions;
+	double field_size;
+	double min_r;
+	double max_r;
+	double step;
 	// optional
     bool is_float;
     int gpu;
+	// internal
+	bool is_initialized;
 };
 
 #endif 
