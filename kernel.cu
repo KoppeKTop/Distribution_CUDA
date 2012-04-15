@@ -7,8 +7,9 @@
 // В общем массиве на ГПУ будут храниться координаты сфер структуры
 // В едином битовом массиве будут храниться уже отмеченные точки
 #include <stdio.h>
-#include <io.h>
+//#include <io.h>
 #include <stdlib.h>
+#include <time.h>
 #include <vector>
 #include <algorithm>
 #include "Indexer.h"
@@ -19,10 +20,10 @@
 #include "Rect.h"
 #include <fstream>
 
-#include <thrust\device_ptr.h>
-#include <thrust\transform_reduce.h>
-#include <thrust\transform.h>
-#include <thrust\count.h>
+#include <thrust/device_ptr.h>
+#include <thrust/transform_reduce.h>
+#include <thrust/transform.h>
+#include <thrust/count.h>
 
 using thrust::device_ptr;
 using thrust::transform_reduce;
@@ -122,8 +123,10 @@ __global__ void overlap_kernel(float4 * spheres, float4 test_sph, int * result)
 // blockDim.x == 32!!!
 // blockDim.y == 8 (or 4 or 16...)
 // gridDim = (fld_size.y, 1)
-// need shared mem == ints_per_line * sizeof(int)
 // one block computes 1 line in all layers
+// maximum - 5.5K shared mem (up to 12288 in each direction) 
+#define MAX_INTS_PER_LINE 384
+
 __global__ void get_overlapping_field(int * fld, float4 * spheres, int spheres_cnt, 
 float radius, int z_cnt, float cell_len, int ints_per_line, int ints_per_layer, 
 float map_shift
@@ -132,48 +135,62 @@ float map_shift
     const int bit_idx = threadIdx.x;
 	const float fld_sz = cell_len * z_cnt;
     int z = 0;
+    int jumps = ints_per_line/blockDim.y;
+    if (jumps * blockDim.y < ints_per_line)
+        jumps++;
     float4 curr_pnt;
     curr_pnt.y = (blockIdx.x + map_shift) * cell_len;
     curr_pnt.z = (z + map_shift) * cell_len;
     curr_pnt.w = radius;
-    extern __shared__ int res []; // temporary results
-
-    if (threadIdx.x == 0)
+    __shared__ int res[MAX_INTS_PER_LINE]; // temporary results
+    __shared__ float4 sh_spheres[BIT_IN_INT*8]; // each thread will load one sphere
+    const short thCnt = blockDim.x * blockDim.y;
+    const short main_idx = threadIdx.x + threadIdx.y*blockDim.x;
+    const int sph_in_last_jump = spheres_cnt % thCnt;
+    const int sph_jumps_cnt = spheres_cnt/thCnt + !!sph_in_last_jump;
+    for (int curr_rem_idx = main_idx; curr_rem_idx < ints_per_line; curr_rem_idx += thCnt)
     {
-        res[threadIdx.y] = 0;
-        if ( threadIdx.y == 0 )
-            res[blockDim.y] = 0;
+        res[curr_rem_idx] = 0;
     }
     __syncthreads();
     for (;z < z_cnt; z++, curr_pnt.z += cell_len)
     {
-        for (int int_idx = threadIdx.y; int_idx < ints_per_line; int_idx += blockDim.y)
+        for (int curr_jump = 0; curr_jump < jumps; curr_jump++)
         {
+            int int_idx = threadIdx.y + blockDim.y * curr_jump;
             curr_pnt.x = (bit_idx + int_idx * 32 + map_shift) * cell_len;
-			//if (curr_pnt.x > fld_sz)
-			//{
-			//	continue;
-			//}
-            bool overlapped = false;
-            for (int sphIdx = 0; sphIdx < spheres_cnt; ++sphIdx)
+            bool overlapped = (int_idx >= ints_per_line);
+
+            for (int sph_jump = 0; sph_jump < sph_jumps_cnt; sph_jump++)
             {
-                if (is_overlapped(curr_pnt, spheres[sphIdx]))
+                int copy_idx = sph_jump*thCnt + main_idx;
+
+                __syncthreads();
+                if (copy_idx < spheres_cnt)
+                    sh_spheres[main_idx] = spheres[copy_idx];
+                __syncthreads();
+                int max_idx_in_shared = (sph_jump + 1 == sph_jumps_cnt) ? sph_in_last_jump : thCnt;
+                
+                int comp_idx = main_idx;
+                do
                 {
-                    overlapped = true;
-                    break;
-                }
+                    if (is_overlapped(curr_pnt, sh_spheres[comp_idx]))
+                        overlapped = true;
+                    if (++comp_idx >= max_idx_in_shared)
+                        comp_idx = 0;
+                } while (!overlapped && comp_idx != main_idx);
             }
-			if (!overlapped)
-			{
+            if (!overlapped)
+            {
 #ifdef _SLOW_TEST
 				atomicOr(fld + int_idx + blockIdx.x * ints_per_line + z * ints_per_layer, 1 << threadIdx.x);
 #else
 				atomicOr(&res[int_idx], 1 << threadIdx.x);
 #endif
-			}
+            }
         }
 #ifndef _SLOW_TEST
-		__syncthreads();
+	__syncthreads();
         if (threadIdx.y == 0) {
 			for (int curr_int = threadIdx.x; curr_int < ints_per_line; curr_int += blockDim.x)
 			{
@@ -348,7 +365,7 @@ CoordVec * get_map(double radius, double sq_len , int divCnt)
 
 void print_map(CoordVec * printed_map)
 {
-	for (auto i = printed_map->begin(); i != printed_map->end(); ++i)
+	for (CoordVec::iterator i = printed_map->begin(); i != printed_map->end(); ++i)
 	{
 		cout << *i << endl;
 	}
@@ -468,7 +485,7 @@ int iteration(float4 * d_spheres, int spheres_cnt, int * d_fld, int * d_centers_
     cudaSafeCall(cudaMemset(d_fld, 0, total_bytes));
     cout << time_from_start() << ": overlapping... ";
 
-    get_overlapping_field <<<dim_grid_over, dim_block_over, ints_per_line * sizeof(int)>>>
+    get_overlapping_field <<<dim_grid_over, dim_block_over>>>
     (d_fld, d_spheres, spheres_cnt, radius, fld_size.z, cell_len, ints_per_line, ints_per_layer,
     iter_map.shift);
     cudaSafeCall(cudaDeviceSynchronize());
@@ -529,6 +546,7 @@ double getVolume(const SphereVec & h_spheres, const Rect & box, double poreSize,
     static int * curr_centers_fld = NULL;
     static float4 * d_spheres = NULL;
     static dim3 start_point, stop_point;
+    static char * result_filename = new char[256];
     
     double radius = poreSize/2.0;
     printf("Division count = %d\n", divCnt);
@@ -594,7 +612,7 @@ double getVolume(const SphereVec & h_spheres, const Rect & box, double poreSize,
 			while (!shifts.is_last())
 			{
 				vector<int> curr_shifts = shifts.curr();
-				for (auto sh = curr_shifts.begin(); sh != curr_shifts.end(); ++sh)
+				for (vector<int>::iterator sh = curr_shifts.begin(); sh != curr_shifts.end(); ++sh)
 				{
 					*sh -= 1;
 				}
@@ -614,16 +632,17 @@ double getVolume(const SphereVec & h_spheres, const Rect & box, double poreSize,
         cudaSafeCall(cudaMemcpy(d_spheres, h_spheres_floats, gpu_points * sizeof(float4), 
                     cudaMemcpyHostToDevice));
         delete [] h_spheres_floats;
+        sprintf(result_filename, "psd_%d.txt", rand());
     }
     
     int cells_cnt = iteration(d_spheres, gpu_points, curr_centers_fld, centers_fld, 
                                 fld_dim, radius, sq_len, result_fld, 
                                 start_point, stop_point);
 
-	ofstream fout("result.txt", ios_base::app);
+	ofstream fout(result_filename, ios_base::app);
 	fout << radius*2 << '\t' << cells_cnt << endl;
 	fout.close();
-
+    cout << "Result written in " << result_filename << endl;
     double one_cell_vol = pow(sq_len, iCoord::GetDefDims());
 
     int added_cells_cnt = cells_cnt - prev_cells_cnt;
@@ -721,6 +740,8 @@ int main(int argc, char ** argv)
     dCoord::SetDefDims(iCoord::GetDefDims()+1);
     Coord<size_t>::SetDefDims(iCoord::GetDefDims());
     SphereVec v;
+    cout << "Profiled version\n";
+    srand(time(NULL));
 	/*int my_argc = 5;
 	char ** my_argv = new char *[my_argc];
 	for (int i = 0; i < my_argc; ++i)
@@ -755,8 +776,8 @@ int main(int argc, char ** argv)
         cout << *curr_d << " ";
     }
     cout << endl;
-	int prevent_exit = 0;
-    std::cin >> prevent_exit;
+//	int prevent_exit = 0;
+//    std::cin >> prevent_exit;
 	return 0;
 }
 
