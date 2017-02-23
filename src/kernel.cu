@@ -60,26 +60,26 @@ typedef vector<dCoord> SphereVec;
 
 time_t time_from_start()
 {
-    static time_t start = time(NULL);
-    return time(NULL) - start;
+	static time_t start = time(NULL);
+	return time(NULL) - start;
 }
 
 ostream& operator<<(ostream& out, dim3& x ) 
 {
-    out << "{x = " << x.x << ", y = " << x.y << ", z = " << x.z << "}";
-    return out;
+	out << "{x = " << x.x << ", y = " << x.y << ", z = " << x.z << "}";
+	return out;
 }
 
 //Round a / b to nearest higher integer value
 int iDivUp(int a, int b)
 {
-    return (a % b != 0) ? (a / b + 1) : (a / b);
+	return (a % b != 0) ? (a / b + 1) : (a / b);
 }
 
 //Align a to nearest higher multiple of b
 int iAlignUp(int a, int b)
 {
-    return (a % b != 0) ?  (a - a % b + b) : a;
+	return (a % b != 0) ?  (a - a % b + b) : a;
 }
 
 
@@ -92,10 +92,10 @@ struct min_dist_point_to_sph
 
 	min_dist_point_to_sph(const float4 c_sph, const dim3 c_fld_sz,
 			const float c_cell_len, const float c_map_shift):
-		sph(c_sph),
-		fld_sz(c_fld_sz),
-		cell_len(c_cell_len),
-		map_shift(c_map_shift)
+				sph(c_sph),
+				fld_sz(c_fld_sz),
+				cell_len(c_cell_len),
+				map_shift(c_map_shift)
 	{}
 
 	__host__ __device__ float sqr(const float & x) const {
@@ -199,7 +199,7 @@ float get_dist_field(const SphereVec & h_spheres, const dim3 fld_sz, const float
 	}
 	max_radius = *thrust::max_element(dist_fld.begin(), dist_fld.end());
 	cout << "Dist map done. Final maximum radius: " << max_radius << endl;
-    return max_radius;
+	return max_radius;
 }
 
 
@@ -212,10 +212,10 @@ struct mark_point
 
 	mark_point(const float c_radius, const dim3 c_fld_sz,
 			char * c_res_fld, const int4 c_delta):
-		radius(c_radius),
-		fld_sz(c_fld_sz),
-		res_fld(c_res_fld),
-		delta(c_delta)
+				radius(c_radius),
+				fld_sz(c_fld_sz),
+				res_fld(c_res_fld),
+				delta(c_delta)
 	{}
 
 	__host__ __device__ int toroise_coord(int coord, int max_coord) const
@@ -337,10 +337,10 @@ void mark_map(const thrust::host_vector<float> & distances, const CoordVec * cur
 
 bool is_overlapped(const dCoord & sph1, const dCoord & sph2)
 {
-    float r_sum = SQR(float(sph1[3] + sph2[3]));
-    float r = SQR((float)(sph1[0] - sph2[0])) + 
-    SQR(float(sph1[1] - sph2[1])) + SQR(float(sph1[2] - sph2[2]));
-    return ((r - r_sum) < float(1e-4));
+	float r_sum = SQR(float(sph1[3] + sph2[3]));
+	float r = SQR((float)(sph1[0] - sph2[0])) +
+			SQR(float(sph1[1] - sph2[1])) + SQR(float(sph1[2] - sph2[2]));
+	return ((r - r_sum) < float(1e-4));
 }
 
 CoordVec * get_map(double radius, double sq_len , int divCnt)
@@ -348,26 +348,26 @@ CoordVec * get_map(double radius, double sq_len , int divCnt)
 	CoordVec * result = new CoordVec;
 	dCoord centre;
 	double centreCoord = sq_len * divCnt / 2.0;
-    
-    for (int d = 0; d < dCoord::GetDefDims()-1; ++d) {
-        centre[d] = centreCoord;
-    }
-    centre[dCoord::GetDefDims()-1] = radius;
+
+	for (int d = 0; d < dCoord::GetDefDims()-1; ++d) {
+		centre[d] = centreCoord;
+	}
+	centre[dCoord::GetDefDims()-1] = radius;
 	vector<int> sz(3, divCnt);
-    Indexer indx(sz);
-    dCoord curr_coord;
-    iCoord curr_icoord;
-    while (!indx.is_last()) {
-        vector<int> curr_vec = indx.curr();
-        for (int d = 0; d < curr_vec.size(); ++d) {
-            curr_coord[d] = (curr_vec[d] + 0.5) * sq_len;
-            curr_icoord[d] = curr_vec[d] - divCnt/2;
-        }
-        if (is_overlapped(centre, curr_coord)) {
-            result->push_back(curr_icoord);
-        }
-        indx.next();
-    }
+	Indexer indx(sz);
+	dCoord curr_coord;
+	iCoord curr_icoord;
+	while (!indx.is_last()) {
+		vector<int> curr_vec = indx.curr();
+		for (int d = 0; d < curr_vec.size(); ++d) {
+			curr_coord[d] = (curr_vec[d] + 0.5) * sq_len;
+			curr_icoord[d] = curr_vec[d] - divCnt/2;
+		}
+		if (is_overlapped(centre, curr_coord)) {
+			result->push_back(curr_icoord);
+		}
+		indx.next();
+	}
 	return result;
 }
 
@@ -464,20 +464,20 @@ float load_maps(const char * fn, thrust::host_vector<float> & dist_fld , thrust:
 
 	fclose(f);
 	cout << "Loaded maps. Point count: " << cnt << endl;
-    float max_radius = *thrust::max_element(dist_fld.begin(), dist_fld.end());
+	float max_radius = *thrust::max_element(dist_fld.begin(), dist_fld.end());
 	cout << "No shift. Max: " << max_radius << ", min: "
 			<< *thrust::min_element(dist_fld.begin(), dist_fld.end()) << endl;
-    float curr_r = *thrust::max_element(dist_fld_shift.begin(), dist_fld_shift.end());
+	float curr_r = *thrust::max_element(dist_fld_shift.begin(), dist_fld_shift.end());
 	cout << "Shift. Max: " << curr_r << ", min: "
-				<< *thrust::min_element(dist_fld_shift.begin(), dist_fld_shift.end()) << endl;
-    if (curr_r > max_radius) max_radius = curr_r;
+			<< *thrust::min_element(dist_fld_shift.begin(), dist_fld_shift.end()) << endl;
+	if (curr_r > max_radius) max_radius = curr_r;
 	return max_radius;
 }
 
 #define RUN_DEVICE
 
 void getDistribution(const SphereVec & spheres, double minPores, double maxPores, double h, int divisions,
-        double field_size, const std::string & maps_fn = "")
+		double field_size, const std::string & maps_fn = "")
 {
 	double sq_len = min(h, minPores/divisions);
 	int fld_dim = ceil(field_size/ sq_len);
@@ -516,38 +516,38 @@ void getDistribution(const SphereVec & spheres, double minPores, double maxPores
 	for (double curr_d = maxPores; curr_d >= minPores; curr_d -= h)
 	{
 		double radius = curr_d/2;
-        if (radius > max_radius) {
-            res_psd.push_back(0);
-            continue;
-        }
+		if (radius > max_radius) {
+			res_psd.push_back(0);
+			continue;
+		}
 		int divCnt;
 		CoordVec * curr_map = generate_host_map(radius, sq_len, divCnt);
 #ifdef RUN_DEVICE
-		if (divCnt % 2 == 0) {
-			mark_map(d_dist_fld, curr_map, radius, fld_sz, result);
-		}
-		else {
-			mark_map(d_dist_fld_shift, curr_map, radius, fld_sz, result);
-		}
+if (divCnt % 2 == 0) {
+	mark_map(d_dist_fld, curr_map, radius, fld_sz, result);
+}
+else {
+	mark_map(d_dist_fld_shift, curr_map, radius, fld_sz, result);
+}
 #else
-		if (divCnt % 2 == 0) {
-			mark_map(h_dist_fld, curr_map, radius, fld_sz, result);
-		} else {
-			mark_map(h_dist_fld_shift, curr_map, radius, fld_sz, result);
-		}
+	if (divCnt % 2 == 0) {
+		mark_map(h_dist_fld, curr_map, radius, fld_sz, result);
+	} else {
+		mark_map(h_dist_fld_shift, curr_map, radius, fld_sz, result);
+	}
 #endif
 
-		int curr_cnt = 0;
+	int curr_cnt = 0;
 #ifdef RUN_DEVICE
-		thrust::device_ptr<char> dev_ptr(result);
-		curr_cnt = thrust::count(dev_ptr, dev_ptr + fld_elements, (char)1);
+	thrust::device_ptr<char> dev_ptr(result);
+	curr_cnt = thrust::count(dev_ptr, dev_ptr + fld_elements, (char)1);
 #else
-		vector<char> host_vec(result, result + fld_elements);
-		curr_cnt = thrust::count(host_vec.begin(), host_vec.end(), (char)1);
+	vector<char> host_vec(result, result + fld_elements);
+	curr_cnt = thrust::count(host_vec.begin(), host_vec.end(), (char)1);
 #endif
-		res_psd.push_back(curr_cnt);
-		cout << "For radius " << radius << " occupied " << curr_cnt << " cells\n";
-		delete curr_map;
+	res_psd.push_back(curr_cnt);
+	cout << "For radius " << radius << " occupied " << curr_cnt << " cells\n";
+	delete curr_map;
 	}
 
 #ifdef RUN_DEVICE
@@ -571,70 +571,70 @@ void getDistribution(const SphereVec & spheres, double minPores, double maxPores
 
 bool exists(const char *fname)
 {
-    if( access( fname, 0 ) != -1 ) {
-        return true;
-    } else {
-        return false;
-    }
+	if( access( fname, 0 ) != -1 ) {
+		return true;
+	} else {
+		return false;
+	}
 }
 
 template <typename T>
 void load_coords(const char * filename, SphereVec * v)
 {
-    if (filename == NULL || v == NULL) {
-        fprintf(stderr, "Load coords error! Wrong args\n");
-        exit(10);
-    }
-    
-    FILE *ifile;
-    T *buffer;
-    unsigned long fileLen;
-    int type_size = sizeof(T);
-    
-    ifile = fopen(filename, "rb");
-    if (!ifile) {
-        fprintf(stderr, "No such file: %s\n", filename);
-        exit(11);
-    }
-    
-    fseek(ifile, 0, SEEK_END);
-    fileLen=ftell(ifile);
-    fseek(ifile, 0, SEEK_SET);
-    
-    if (fileLen % type_size != 0 || fileLen/type_size % dCoord::GetDefDims() != 0) {
-        fprintf(stderr, "Wrong file: %s\n", filename);
-        exit(12);
-    }
-    
-    buffer=(T *)malloc(dCoord::GetDefDims() * type_size);
-    if (!buffer)
-    {
-        fprintf(stderr, "Memory error!");
-        fclose(ifile);
-        exit(13);
-    }
-    
-    v->clear();
-    while (fread(buffer, dCoord::GetDefDims(), type_size, ifile)) {
-        dCoord curr;
-        for (int i = 0; i < dCoord::GetDefDims(); ++i) {
-            curr[i] = (double)buffer[i];
-        }
-        v->push_back(curr);
-    }
-    
-    fclose(ifile);
-    
-    cout << v->size() << " points added\n";
+	if (filename == NULL || v == NULL) {
+		fprintf(stderr, "Load coords error! Wrong args\n");
+		exit(10);
+	}
+
+	FILE *ifile;
+	T *buffer;
+	unsigned long fileLen;
+	int type_size = sizeof(T);
+
+	ifile = fopen(filename, "rb");
+	if (!ifile) {
+		fprintf(stderr, "No such file: %s\n", filename);
+		exit(11);
+	}
+
+	fseek(ifile, 0, SEEK_END);
+	fileLen=ftell(ifile);
+	fseek(ifile, 0, SEEK_SET);
+
+	if (fileLen % type_size != 0 || fileLen/type_size % dCoord::GetDefDims() != 0) {
+		fprintf(stderr, "Wrong file: %s\n", filename);
+		exit(12);
+	}
+
+	buffer=(T *)malloc(dCoord::GetDefDims() * type_size);
+	if (!buffer)
+	{
+		fprintf(stderr, "Memory error!");
+		fclose(ifile);
+		exit(13);
+	}
+
+	v->clear();
+	while (fread(buffer, dCoord::GetDefDims(), type_size, ifile)) {
+		dCoord curr;
+		for (int i = 0; i < dCoord::GetDefDims(); ++i) {
+			curr[i] = (double)buffer[i];
+		}
+		v->push_back(curr);
+	}
+
+	fclose(ifile);
+
+	cout << v->size() << " points added\n";
 }
 
 int main(int argc, char ** argv)
 {
-    iCoord::SetDefDims(3);
-    dCoord::SetDefDims(iCoord::GetDefDims()+1);
-    Coord<size_t>::SetDefDims(iCoord::GetDefDims());
-    SphereVec v;
-    srand(time(NULL));
+	iCoord::SetDefDims(3);
+	dCoord::SetDefDims(iCoord::GetDefDims()+1);
+	Coord<size_t>::SetDefDims(iCoord::GetDefDims());
+	SphereVec v;
+	srand(time(NULL));
 	/*int my_argc = 5;
 	char ** my_argv = new char *[my_argc];
 	for (int i = 0; i < my_argc; ++i)
@@ -646,23 +646,23 @@ int main(int argc, char ** argv)
 	strcpy(my_argv[2], "4");
 	strcpy(my_argv[3], "5.4641016");
 	strcpy(my_argv[4], "-float");*/
-    TCalcPlan plan;
+	TCalcPlan plan;
 	int plan_error = plan.Init(argc, argv);
 	if (plan_error)
 	{
 		return plan_error;
 	}
 	int divisions = plan.divisions;
-    cudaSafeCall(cudaSetDevice(plan.gpu));
-    time_from_start();
-    
-    if (plan.is_float) {
-        load_coords<float>(plan.filename, &v);
-    } else {
-        load_coords<double>(plan.filename, &v);
-    }
+	cudaSafeCall(cudaSetDevice(plan.gpu));
+	time_from_start();
 
-    getDistribution(v, plan.min_r, plan.max_r, plan.step, divisions, plan.field_size, plan.maps_fn);
+	if (plan.is_float) {
+		load_coords<float>(plan.filename, &v);
+	} else {
+		load_coords<double>(plan.filename, &v);
+	}
+
+	getDistribution(v, plan.min_r, plan.max_r, plan.step, divisions, plan.field_size, plan.maps_fn);
 
 	return 0;
 }
