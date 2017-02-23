@@ -13,6 +13,11 @@
 #include <stdlib.h>
 #include <string.h>
 #include <iostream>
+
+#include "rapidjson/document.h"
+#include "rapidjson/writer.h"
+#include "rapidjson/stringbuffer.h"
+
 using namespace std;
 
 #define REQUIRED_PARAMETERS_CNT 6
@@ -22,10 +27,9 @@ struct TCalcPlan
 {
 	int Init(int argc, char ** argv)
 	{
-		// TODO: parse YAML config instead argv
 		FILE * ifile = NULL;
 		int req_params_nums[REQUIRED_PARAMETERS_CNT];
-		char usage_string[] = "Usage: %s points_file division_number field_size min_r max_r step [-float] [-GPU=num]\n";
+		char usage_string[] = "Usage: %s points_file division_number field_size min_r max_r step [-float] [-GPU=num] [-maps=maps.maps]\n";
 		int result = 0;
 		// 1. Must be at least 3 parameters
 		if (argc < 3) {
@@ -35,6 +39,7 @@ struct TCalcPlan
 
 		is_float = false;
 		gpu = 0;
+		maps_fn = "";
 
 		int param_idx, req_param_idx;
 		for (param_idx = 1, req_param_idx = 0; param_idx < argc; param_idx++ )
@@ -46,6 +51,9 @@ struct TCalcPlan
 			}	else if (strcmp(pch, "GPU") == 0)	{
 				pch = strtok (NULL, "-=");
 				gpu = atoi(pch);
+			}	else if (strcmp(pch, "maps") == 0) {
+				pch = strtok (NULL, "-=");
+				maps_fn = std::string(pch);
 			}	else if (req_param_idx == REQUIRED_PARAMETERS_CNT)	{
 				fprintf(stderr, "Too much parameters\n");
 				result = 23;
@@ -125,6 +133,7 @@ wrong_args:
 	// optional
     bool is_float;
     int gpu;
+    std::string maps_fn;
 	// internal
 	bool is_initialized;
 };

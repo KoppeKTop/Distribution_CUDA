@@ -7,10 +7,17 @@
 // В общем массиве на ГПУ будут храниться координаты сфер структуры
 // В едином битовом массиве будут храниться уже отмеченные точки
 #include <stdio.h>
-//#include <io.h>
+
+#ifdef __linux__
+#include <unistd.h>
+#else
+#include <io.h>
+#endif
 #include <stdlib.h>
 #include <time.h>
 #include <vector>
+#include <map>
+#include <utility>
 #include <algorithm>
 #include "Indexer.h"
 #include "Coord.h"
@@ -19,16 +26,19 @@
 #include <cuda_runtime.h>
 #include "Rect.h"
 #include <fstream>
+#include <string>
 
 #include <thrust/device_ptr.h>
-#include <thrust/transform_reduce.h>
 #include <thrust/transform.h>
 #include <thrust/count.h>
-
-using thrust::device_ptr;
-using thrust::transform_reduce;
-using thrust::transform;
-using thrust::counting_iterator;
+#include <thrust/device_vector.h>
+#include <thrust/host_vector.h>
+#include <thrust/fill.h>
+#include <thrust/iterator/counting_iterator.h>
+#include <thrust/functional.h>
+#include <thrust/logical.h>
+#include <thrust/execution_policy.h>
+#include <thrust/extrema.h>
 
 using std::cout;
 using std::cerr;
@@ -72,136 +82,258 @@ int iAlignUp(int a, int b)
     return (a % b != 0) ?  (a - a % b + b) : a;
 }
 
-__host__ __device__ bool is_overlapped(const float4 sph1, const float4 sph2)
-{
-    float r_sum = SQR((float)(sph1.w + sph2.w));
-    float r = SQR((float)(sph1.x - sph2.x)) + 
-    SQR((float)(sph1.y - sph2.y)) + SQR((float)(sph1.z - sph2.z));
-    return ((r - r_sum) < (float)(1e-4));
-}
 
-bool is_overlapped(const dCoord & sph1, const dCoord & sph2)
+struct min_dist_point_to_sph
 {
-    float r_sum = SQR(float(sph1[3] + sph2[3]));
-    float r = SQR((float)(sph1[0] - sph2[0])) + 
-    SQR(float(sph1[1] - sph2[1])) + SQR(float(sph1[2] - sph2[2]));
-    return ((r - r_sum) < float(1e-4));
-}
+	const float4 sph;
+	const dim3 fld_sz;
+	const float cell_len;
+	const float map_shift;
 
-__host__ __device__ int NumberOfSetBits(int i)
-{
-    i = i - ((i >> 1) & 0x55555555);
-    i = (i & 0x33333333) + ((i >> 2) & 0x33333333);
-    return (((i + (i >> 4)) & 0x0F0F0F0F) * 0x01010101) >> 24;
-}
+	min_dist_point_to_sph(const float4 c_sph, const dim3 c_fld_sz,
+			const float c_cell_len, const float c_map_shift):
+		sph(c_sph),
+		fld_sz(c_fld_sz),
+		cell_len(c_cell_len),
+		map_shift(c_map_shift)
+	{}
 
-struct bits_cntr
-{
-	__host__ __device__ 
-		int operator()(int i)
+	__host__ __device__ float sqr(const float & x) const {
+		return x*x;
+	}
+
+	__host__ __device__ float operator()(const float & prev_dist, const int & coord_index) const
 	{
-		i = i - ((i >> 1) & 0x55555555);
-		i = (i & 0x33333333) + ((i >> 2) & 0x33333333);
-		return (((i + (i >> 4)) & 0x0F0F0F0F) * 0x01010101) >> 24;
+		int x, y, z;
+		float curr_dist = 0;
+		z = coord_index / (fld_sz.x * fld_sz.y);
+		y = (coord_index - z * fld_sz.x * fld_sz.y) / fld_sz.x;
+		x = coord_index - z * fld_sz.x * fld_sz.y - y * fld_sz.x;
+
+		curr_dist += sqr((x + map_shift) * cell_len - sph.x);
+		curr_dist += sqr((y + map_shift) * cell_len - sph.y);
+		curr_dist += sqr((z + map_shift) * cell_len - sph.z);
+		curr_dist = sqrtf(curr_dist);
+		curr_dist -= sph.w;
+		if (curr_dist < prev_dist) {
+			return curr_dist;
+		}
+		return prev_dist;
 	}
 };
 
-// count number of settet bits on GPU array
-int fld_bit_cnt(int * fld, size_t elements_cnt)
-{
-	device_ptr<int> dev_ptr(fld);
-	return transform_reduce(dev_ptr, dev_ptr + elements_cnt, bits_cntr(), 0, thrust::plus<int>());
-}
 
-__global__ void overlap_kernel(float4 * spheres, float4 test_sph, int * result)
-{
-    if (is_overlapped(spheres[threadIdx.x], test_sph)) {
-        result[threadIdx.x] = 1;
-    }
-}
+void expand_spheres(const SphereVec & h_spheres, const Rect & box, vector<float4> & res) {
+	res.clear();
+	Indexer shifts(vector<int>(3, 3));
 
-// blockDim.x == 32!!!
-// blockDim.y == 8 (or 4 or 16...)
-// gridDim = (fld_size.y, 1)
-// one block computes 1 line in all layers
-// maximum - 5.5K shared mem (up to 12288 in each direction) 
-#define MAX_INTS_PER_LINE 384
-
-__global__ void get_overlapping_field(int * fld, float4 * spheres, int spheres_cnt, 
-float radius, int z_cnt, float cell_len, int ints_per_line, int ints_per_layer, 
-float map_shift
-)
-{
-    const int bit_idx = threadIdx.x;
-	const float fld_sz = cell_len * z_cnt;
-    int z = 0;
-    int jumps = ints_per_line/blockDim.y;
-    if (jumps * blockDim.y < ints_per_line)
-        jumps++;
-    float4 curr_pnt;
-    curr_pnt.y = (blockIdx.x + map_shift) * cell_len;
-    curr_pnt.z = (z + map_shift) * cell_len;
-    curr_pnt.w = radius;
-    __shared__ int res[MAX_INTS_PER_LINE]; // temporary results
-    __shared__ float4 sh_spheres[BIT_IN_INT*8]; // each thread will load one sphere
-    const short thCnt = blockDim.x * blockDim.y;
-    const short main_idx = threadIdx.x + threadIdx.y*blockDim.x;
-    const int sph_in_last_jump = spheres_cnt % thCnt;
-    const int sph_jumps_cnt = spheres_cnt/thCnt + !!sph_in_last_jump;
-    for (int curr_rem_idx = main_idx; curr_rem_idx < ints_per_line; curr_rem_idx += thCnt)
-    {
-        res[curr_rem_idx] = 0;
-    }
-    __syncthreads();
-    for (;z < z_cnt; z++, curr_pnt.z += cell_len)
-    {
-        for (int curr_jump = 0; curr_jump < jumps; curr_jump++)
-        {
-            int int_idx = threadIdx.y + blockDim.y * curr_jump;
-            curr_pnt.x = (bit_idx + int_idx * 32 + map_shift) * cell_len;
-            bool overlapped = (int_idx >= ints_per_line);
-
-            for (int sph_jump = 0; sph_jump < sph_jumps_cnt; sph_jump++)
-            {
-                int copy_idx = sph_jump*thCnt + main_idx;
-
-                __syncthreads();
-                if (copy_idx < spheres_cnt)
-                    sh_spheres[main_idx] = spheres[copy_idx];
-                __syncthreads();
-                int max_idx_in_shared = (sph_jump + 1 == sph_jumps_cnt) ? sph_in_last_jump : thCnt;
-                
-                int comp_idx = main_idx;
-                do
-                {
-                    if (is_overlapped(curr_pnt, sh_spheres[comp_idx]))
-                        overlapped = true;
-                    if (++comp_idx >= max_idx_in_shared)
-                        comp_idx = 0;
-                } while (!overlapped && comp_idx != main_idx);
-            }
-            if (!overlapped)
-            {
-#ifdef _SLOW_TEST
-				atomicOr(fld + int_idx + blockIdx.x * ints_per_line + z * ints_per_layer, 1 << threadIdx.x);
-#else
-				atomicOr(&res[int_idx], 1 << threadIdx.x);
-#endif
-            }
-        }
-#ifndef _SLOW_TEST
-	__syncthreads();
-        if (threadIdx.y == 0) {
-			for (int curr_int = threadIdx.x; curr_int < ints_per_line; curr_int += blockDim.x)
+	for (int i = 0; i < h_spheres.size(); ++i)
+	{
+		while (!shifts.is_last())
+		{
+			vector<int> curr_shifts = shifts.curr();
+			for (vector<int>::iterator sh = curr_shifts.begin(); sh != curr_shifts.end(); ++sh)
 			{
-				atomicOr(fld + curr_int + blockIdx.x * ints_per_line + z * ints_per_layer, res[curr_int]);
-				res[curr_int] = 0;
+				*sh -= 1;
 			}
-        }
-        __syncthreads();
-#endif
-    }
+			shifts.next();
+			if (curr_shifts[0] == 0 && curr_shifts[1] == 0 &&
+					curr_shifts[2] == 0)
+			{
+				continue;
+			}
+			res.push_back(make_float4(curr_shifts[0] * box.maxCoord[0] + h_spheres[i][0],
+					curr_shifts[1] * box.maxCoord[1] + h_spheres[i][1],
+					curr_shifts[2] * box.maxCoord[2] + h_spheres[i][2], h_spheres[i][3]));
+		}
+		shifts.to_begin();
+	}
 }
+
+void shrink_spheres(vector<float4>::const_iterator start, vector<float4>::const_iterator end, const float radius, const Rect & box, vector<float4> & res)
+{
+	res.clear();
+	for (auto sph = start; sph != end; ++sph) {
+		if (sph->x + sph->w + radius < box.minCoord[0]) continue;
+		if (sph->y + sph->w + radius < box.minCoord[1]) continue;
+		if (sph->z + sph->w + radius < box.minCoord[2]) continue;
+		if (sph->x - sph->w - radius > box.maxCoord[0]) continue;
+		if (sph->y - sph->w - radius > box.maxCoord[1]) continue;
+		if (sph->z - sph->w - radius > box.maxCoord[2]) continue;
+		res.push_back(*sph);
+	}
+}
+
+float get_dist_field(const SphereVec & h_spheres, const dim3 fld_sz, const float cell_len,
+		const float map_shift, thrust::device_vector<float> & dist_fld)
+{
+	float max_dist = sqrtf(SQR(fld_sz.x) + SQR(fld_sz.y) + SQR(fld_sz.z)); // diagonal is a max distance
+	vector<float4> orig_sph, expanded_sph, shrinked_sph;
+	// first of all original spheres will be in the list
+	for (auto sph : h_spheres) {
+		orig_sph.push_back(make_float4(sph[0], sph[1], sph[2], sph[3]));
+	}
+
+	Rect box;
+	for (int i = 0; i < 3; i++)
+		box.minCoord[i] = 0;
+	box.maxCoord[0] = fld_sz.x * cell_len;
+	box.maxCoord[1] = fld_sz.y * cell_len;
+	box.maxCoord[2] = fld_sz.z * cell_len;
+
+	thrust::fill(dist_fld.begin(), dist_fld.end(), max_dist);
+	thrust::counting_iterator<int> cnt(0);
+	for (auto curr_sph : orig_sph) {
+		min_dist_point_to_sph dist_calc(curr_sph, fld_sz, cell_len, map_shift);
+		thrust::transform(dist_fld.begin(), dist_fld.end(), cnt, dist_fld.begin(), dist_calc);
+	}
+	cout << "Finished internal spheres" << endl;
+	float max_radius = *thrust::max_element(dist_fld.begin(), dist_fld.end());
+	cout << "Maximum radius: " <<  max_radius << endl;
+	expand_spheres(h_spheres, box, expanded_sph);
+	shrink_spheres(expanded_sph.begin(), expanded_sph.end(), max_radius, box, shrinked_sph);
+	cout << shrinked_sph.size() << " external spheres from " << expanded_sph.size() << endl;
+	for (auto curr_sph : shrinked_sph) {
+		min_dist_point_to_sph dist_calc(curr_sph, fld_sz, cell_len, map_shift);
+		thrust::transform(dist_fld.begin(), dist_fld.end(), cnt, dist_fld.begin(), dist_calc);
+	}
+	max_radius = *thrust::max_element(dist_fld.begin(), dist_fld.end());
+	cout << "Dist map done. Final maximum radius: " << max_radius << endl;
+    return max_radius;
+}
+
+
+struct mark_point
+{
+	const float radius;
+	const dim3 fld_sz;
+	char * res_fld;
+	const int4 delta;
+
+	mark_point(const float c_radius, const dim3 c_fld_sz,
+			char * c_res_fld, const int4 c_delta):
+		radius(c_radius),
+		fld_sz(c_fld_sz),
+		res_fld(c_res_fld),
+		delta(c_delta)
+	{}
+
+	__host__ __device__ int toroise_coord(int coord, int max_coord) const
+	{
+		if (coord < 0) {
+			return coord + max_coord;
+		} else if (coord >= max_coord) {
+			return coord - max_coord;
+		}
+		return coord;
+	}
+
+	__host__ __device__ char operator()(const float & distance, const int & coord_index) const
+	{
+		if (distance <= radius) {
+			return 0;
+		}
+		int x, y, z, new_idx;
+
+		z = coord_index / (fld_sz.x * fld_sz.y);
+		y = (coord_index - z * fld_sz.x * fld_sz.y) / fld_sz.x;
+		x = coord_index - z * fld_sz.x * fld_sz.y - y * fld_sz.x;
+
+		x = toroise_coord(x + delta.x, fld_sz.x);
+		y = toroise_coord(y + delta.y, fld_sz.y);
+		z = toroise_coord(z + delta.z, fld_sz.z);
+
+		for (int d = 0; d < delta.w; ++d) {
+			new_idx = x + fld_sz.x * y + fld_sz.x * fld_sz.y * z;
+			res_fld[new_idx] = 1;
+			x = toroise_coord(x + 1, fld_sz.x);
+		}
+
+		return 1;
+	}
+};
+
+void coalesce_map(const CoordVec * curr_map, vector<int4> & coalesced)
+{
+	typedef std::map<std::pair<int, int>, int4> res_map;
+	res_map result;
+	for (size_t map_idx = curr_map->size(); map_idx != 0; map_idx -- )
+	{
+		const iCoord curr_coord = curr_map->at(map_idx-1);
+		const std::pair<int, int> curr_id(curr_coord[1], curr_coord[2]);
+		if (result.find(curr_id) != result.end()) {
+			int4 curr_descr = result[curr_id];
+			if (curr_descr.x > curr_coord[0]) {
+				curr_descr.x = curr_coord[0];
+			}
+			curr_descr.w += 1;
+			result[curr_id] = curr_descr;
+		} else {
+			int4 curr_descr = make_int4(curr_coord[0], curr_coord[1], curr_coord[2], 1);
+			result[curr_id] = curr_descr;
+		}
+	}
+	coalesced.clear();
+	for (res_map::iterator map_it = result.begin(); map_it != result.end(); ++map_it) {
+		coalesced.push_back(map_it->second);
+	}
+}
+
+void mark_map(const thrust::device_vector<float> & distances, const CoordVec * curr_map, const float radius,
+		const dim3 fld_sz, char * d_result)
+{
+	thrust::device_vector<char> centers_fld(distances.size());
+	vector<int4> coalesced_map;
+	coalesce_map(curr_map, coalesced_map);
+
+	cout << "Apply map for radius " << radius << ", " << coalesced_map.size() << " Points in map" << endl;
+
+	int status_print = coalesced_map.size() / 10;
+	if (status_print < 10) {
+		status_print = 100;
+	}
+
+	for (size_t map_idx = 0; map_idx < coalesced_map.size(); ++map_idx)
+	{
+		int4 delta = coalesced_map[map_idx];
+		mark_point op(radius, fld_sz, d_result, delta);
+		thrust::counting_iterator<int> cnt(0);
+		thrust::transform(distances.begin(), distances.end(), cnt, centers_fld.begin(), op);
+
+		if ((map_idx + 1) % status_print == 0) {
+			cout << map_idx + 1 << " points done" << endl;
+		}
+	}
+
+	cout << "Finish apply map" << endl;
+}
+
+void mark_map(const thrust::host_vector<float> & distances, const CoordVec * curr_map, const float radius,
+		const dim3 fld_sz, char * d_result)
+{
+	thrust::host_vector<char> centers_fld(distances.size());
+	vector<int4> coalesced_map;
+	coalesce_map(curr_map, coalesced_map);
+
+	cout << "Apply map for radius " << radius << ", " << coalesced_map.size() << " Points in map\n";
+
+	int status_print = coalesced_map.size() / 100;
+
+	for (size_t map_idx = 0; map_idx < coalesced_map.size(); ++map_idx)
+	{
+		int4 delta = coalesced_map[map_idx];
+		mark_point op(radius, fld_sz, d_result, delta);
+		thrust::counting_iterator<int> cnt(0);
+		thrust::transform(thrust::host, distances.begin(), distances.end(), cnt, centers_fld.begin(), op);
+
+		if ((map_idx + 1) % status_print == 0) {
+			cout << map_idx + 1 << " points done" << endl;
+		}
+	}
+
+	cout << "Finish apply map" << endl;
+}
+
 
 __global__ void xor_fields(int * fld1, int * fld2, int * dest, int cnt)
 {
@@ -227,112 +359,12 @@ struct Map
     float shift;
 };
 
-// каждый поток будет двигать один int в соответствии с картой
-// каждый блок будет двигать линию 
-// размерность блока: ints_per_line, 1, 1
-// количество блоков: fld_size.y, fld_size.z
-// нужно (blockDim.x+1) * sizeof(int) байт shared памяти
-__global__ void apply_map(int * centers_fld, int * result_fld, Map map,
-int ints_per_line, int ints_per_layer)
+bool is_overlapped(const dCoord & sph1, const dCoord & sph2)
 {
-    const int x = threadIdx.x;
-    const int y = blockIdx.x;
-    const int z = blockIdx.y;
-
-    int new_x, new_y, new_z;
-
-    const int templ = centers_fld[x + y * ints_per_line + z * ints_per_layer];
-
-    // __shared__ int shifted_line [];
-    // shifted_line[x] = templ;
-    // if (x == 0)
-    // {
-    //  shifted_line[blockDim.x] = 0;
-    // }
-    // __syncthreads();
-
-    if (templ == 0)
-    {
-        return; // nothing to move
-    }
-
-    int bit_shift = 0;
-    int first_int = 0;
-    int second_int = 0;
-
-    for (int curr_map_idx = 0; curr_map_idx < map.cnt; curr_map_idx++)
-    {
-        new_y = y + map.y[curr_map_idx];
-        new_z = z + map.z[curr_map_idx];
-		if (new_y < 0 || gridDim.x <= new_y || new_z < 0 || gridDim.y <= new_z)
-			continue;
-		// the most tricky part: x axis shift is must be mapped to entire integer
-		// shift counted in bits
-		int shift = map.x[curr_map_idx];
-        if (shift < 0)
-        {
-            new_x = x + shift / 32 - 1; 
-			bit_shift = 32 + shift % 32;
-        } else {
-			new_x = x + shift / 32;
-			bit_shift = shift % 32;
-		}
-        first_int = templ << bit_shift;
-        second_int = templ >> (32 - bit_shift);
-        if (0 <= new_x && new_x < ints_per_line)
-			atomicOr(result_fld + new_x + new_y * ints_per_line + new_z * ints_per_layer, first_int);
-		new_x += 1;
-		if (0 <= new_x && new_x < ints_per_line)
-			atomicOr(result_fld + new_x + new_y * ints_per_line + new_z * ints_per_layer, second_int);
-    }
-}
-
-// считаем количество взведённых бит на поле
-// размерность блока: ints_per_line, 1, 1
-// количество блоков: fld_size.y, fld_size.z
-__global__ void fld_cnt(int * fld, dim3 start_point, dim3 stop_point, int * result)
-{
-    const int start_x = threadIdx.x * 32;
-    const int stop_x = start_x + 31;
-    
-    __shared__ int bits_in_line;
-    if (threadIdx.x == 0)
-    {
-        bits_in_line = 0;
-    }
-    __syncthreads();
-
-    if (stop_x < start_point.x || blockIdx.x < start_point.y || blockIdx.y < start_point.z || 
-        start_x > stop_point.x || blockIdx.x > stop_point.y || blockIdx.y > stop_point.z )
-    {
-        return;
-    }
-
-    int current_val = fld[threadIdx.x + blockIdx.x * blockDim.x + blockIdx.y * blockDim.x * gridDim.x];
-	if (current_val == 0)
-    {
-        return;
-    }
-
-    if (start_x < start_point.x && start_point.x <= stop_x)
-    {
-        current_val &= 0xFFFFFFFF << (start_point.x - start_x);
-
-    }  
-	if (start_x <= stop_point.x && stop_point.x < stop_x)
-    {
-        current_val &= 0xFFFFFFFF >> (stop_x - stop_point.x);
-    }
-
-	if (current_val == 0) return;
-	//atomicAdd(&bits_in_line, NumberOfSetBits(current_val));
- //   __syncthreads();
-    atomicAdd(result, NumberOfSetBits(current_val));
-}
-
-bool compare_shifts(const iCoord & first, const iCoord & second)
-{
-    return (first[0] % 32) < (second[0] % 32);
+    float r_sum = SQR(float(sph1[3] + sph2[3]));
+    float r = SQR((float)(sph1[0] - sph2[0])) + 
+    SQR(float(sph1[1] - sph2[1])) + SQR(float(sph1[2] - sph2[2]));
+    return ((r - r_sum) < float(1e-4));
 }
 
 CoordVec * get_map(double radius, double sq_len , int divCnt)
@@ -363,23 +395,10 @@ CoordVec * get_map(double radius, double sq_len , int divCnt)
 	return result;
 }
 
-void print_map(CoordVec * printed_map)
+CoordVec * generate_host_map(const double radius, const double cell_len, int & divCnt)
 {
-	for (CoordVec::iterator i = printed_map->begin(); i != printed_map->end(); ++i)
-	{
-		cout << *i << endl;
-	}
-}
-
-// generates map and stores it in GPU
-// for maximum performance map must be sorted (by bit shifts)
-Map generate_map(double radius, double cell_len)
-// radius – радиус сферы
-// a – сторона куба (квадрата)
-{
-    int divCntSmall = floor(2.0 * radius / cell_len);
+	int divCntSmall = floor(2.0 * radius / cell_len);
 	int divCntBig = ceil(2.0 * radius /cell_len);
-	int divCnt;
 	double cube_vol = pow(cell_len, 3);
 	double sph_vol = 4.0/3.0 * PI * pow(radius, 3);
 	CoordVec * curr_map;
@@ -406,273 +425,172 @@ Map generate_map(double radius, double cell_len)
 		curr_map = get_map(radius, cell_len, divCntBig);
 		divCnt = divCntBig;
 	}
-    std::sort(curr_map->begin(), curr_map->end(), compare_shifts);
-    Map result;
-    int gpu_arr_sz = curr_map->size() * sizeof(short);
-    cudaSafeCall(cudaMalloc(&(result.x), gpu_arr_sz));
-    cudaSafeCall(cudaMalloc(&(result.y), gpu_arr_sz));
-    cudaSafeCall(cudaMalloc(&(result.z), gpu_arr_sz));
 
-    short * x = new short[curr_map->size()];
-    short * y = new short[curr_map->size()];
-    short * z = new short[curr_map->size()];
-    for (int idx = 0; idx < curr_map->size(); ++idx)
-    {
-        x[idx] = curr_map[0][idx][0];
-        y[idx] = curr_map[0][idx][1];
-        z[idx] = curr_map[0][idx][2];
-    }
-    cudaSafeCall(cudaMemcpy(result.x, x, gpu_arr_sz, cudaMemcpyHostToDevice));
-    cudaSafeCall(cudaMemcpy(result.y, y, gpu_arr_sz, cudaMemcpyHostToDevice));
-    cudaSafeCall(cudaMemcpy(result.z, z, gpu_arr_sz, cudaMemcpyHostToDevice));
-    result.cnt = curr_map->size();
-    result.shift = (divCnt % 2) * 0.5f;
-
-    cout << curr_map->size() << " points in map\n";
-
-    delete [] x;
-    delete [] y;
-    delete [] z;
-    delete curr_map;
-    return result;
+	return curr_map;
 }
 
-__global__ void init_centers_kernel(int * fld, int ints_per_line, int ignore_bits, int total_ints)
+template <typename T>
+struct gt
 {
-	int idx = threadIdx.x + blockIdx.x * blockDim.x;
-	if (idx >= total_ints) return;
-	if (idx % ints_per_line == ints_per_line-1)
-		fld[idx] = 0xFFFFFFFF << ignore_bits;
-	else
-		fld[idx] = 0;
+	T rhs;
+	gt(const T c_rhs):
+		rhs(c_rhs)
+	{}
+
+	__host__ __device__ bool operator()(const T& lhs) { return lhs > rhs; }
+};
+
+
+void dump_maps(const thrust::host_vector<float> & dist_fld , const thrust::host_vector<float> & dist_fld_shift)
+{
+	char buf[256];
+	sprintf(buf, "%d.maps", rand());
+
+	const float * fld_1 = thrust::raw_pointer_cast(&dist_fld[0]);
+	const float * fld_2 = thrust::raw_pointer_cast(&dist_fld_shift[0]);
+
+	FILE * f = fopen(buf, "wb");
+	if (f == NULL) {
+		cout << "Can not open file " << buf << endl;
+		return;
+	}
+	fwrite(fld_1, sizeof(float), dist_fld.size(), f);
+	fwrite(fld_2, sizeof(float), dist_fld_shift.size(), f);
+	fclose(f);
+	cout << "Maps saved in " << buf << endl;
 }
 
-void init_centers_fld(int * fld, const dim3 & fld_size)
+float load_maps(const char * fn, thrust::host_vector<float> & dist_fld , thrust::host_vector<float> & dist_fld_shift)
 {
-	int ints_per_line = fld_size.x/BIT_IN_INT;
-	int ignore_bits = fld_size.x - fld_size.y;
-	int total_ints = ints_per_line * fld_size.y * fld_size.z;
-	int threads_per_block = 512;
-	int num_blocks = total_ints / threads_per_block + 1;
-	init_centers_kernel <<< num_blocks, threads_per_block >>>(fld, ints_per_line, ignore_bits, total_ints);
-	cudaSafeCall(cudaDeviceSynchronize());
+	FILE * f = fopen(fn, "rb");
+	if (f == NULL) {
+		cout << "Cannot open map file " << fn  << endl;
+		return 0;
+	}
+	fseek(f, 0L, SEEK_END);
+	size_t sz = ftell(f);
+	rewind(f);
+	size_t cnt = sz / sizeof(float) / 2;
+	size_t ret;
+	float * buffer = new float[cnt];
+	ret = fread(buffer, sizeof(float), cnt, f);
+	if (ret != cnt) {
+		cout << "bad maps file\n";
+		return 0;
+	}
+	dist_fld.assign(buffer, buffer+cnt);
+	ret = fread(buffer, sizeof(float), cnt, f);
+	if (ret != cnt) {
+		cout << "bad maps file\n";
+		return 0;
+	}
+	dist_fld_shift.assign(buffer, buffer+cnt);
+
+	fclose(f);
+	cout << "Loaded maps. Point count: " << cnt << endl;
+    float max_radius = *thrust::max_element(dist_fld.begin(), dist_fld.end());
+	cout << "No shift. Max: " << max_radius << ", min: "
+			<< *thrust::min_element(dist_fld.begin(), dist_fld.end()) << endl;
+    float curr_r = *thrust::max_element(dist_fld_shift.begin(), dist_fld_shift.end());
+	cout << "Shift. Max: " << curr_r << ", min: "
+				<< *thrust::min_element(dist_fld_shift.begin(), dist_fld_shift.end()) << endl;
+    if (curr_r > max_radius) max_radius = curr_r;
+	return max_radius;
 }
 
-int iteration(float4 * d_spheres, int spheres_cnt, int * d_fld, int * d_centers_fld, 
-                const dim3 & fld_size, double radius, double cell_len, int * result_fld,
-                dim3 start_point, dim3 stop_point)
+#define RUN_DEVICE
+
+void getDistribution(const SphereVec & spheres, double minPores, double maxPores, double h, int divisions,
+        double field_size, const std::string & maps_fn = "")
 {
-    int ints_per_line = fld_size.x/BIT_IN_INT;
-    int ints_per_layer = ints_per_line * fld_size.y;
-    int total_bytes = fld_size.x * fld_size.y * fld_size.z / 8;
-    int total_ints = ints_per_layer * fld_size.z;
-    Map iter_map = generate_map(radius, cell_len);
+	double sq_len = min(h, minPores/divisions);
+	int fld_dim = ceil(field_size/ sq_len);
+	dim3 fld_sz(fld_dim, fld_dim, fld_dim);
+	size_t fld_elements = fld_sz.x*fld_sz.y*fld_sz.z;
 
-    dim3 dim_block_over(BIT_IN_INT, 8, 1);
-    dim3 dim_grid_over(fld_size.y, 1);
-    dim3 dim_block_help(THREADS_IN_HELPERS, 1, 1);
-    dim3 dim_grid_help((total_ints % dim_block_help.x == 0) ? (total_ints / dim_block_help.x) : (total_ints / dim_block_help.x + 1), 1);
-    dim3 dim_block_map(ints_per_line, 1, 1);
-    dim3 dim_grid_map(fld_size.y, fld_size.z);
+	char * result = NULL;
+#ifdef RUN_DEVICE
+	cudaSafeCall(cudaMalloc(&(result), fld_elements));
+	cudaSafeCall(cudaMemset(result, 0, fld_elements));
+#else
+	result = new char[fld_elements];
+	memset(result, 0, fld_elements);
+#endif
 
-    int * d_cells_cnt;
-    int result = 0xDEADBEEF;
+	vector<int> res_psd;
+	thrust::device_vector<float> d_dist_fld(fld_elements);
+	thrust::device_vector<float> d_dist_fld_shift(fld_elements);
+	thrust::host_vector<float>  h_dist, h_dist_shift;
+    float max_radius = 0;
+	if (maps_fn.length() > 1) {
+		max_radius = load_maps(maps_fn.c_str(), h_dist, h_dist_shift);
+		d_dist_fld = h_dist;
+		d_dist_fld_shift = h_dist_shift;
+	} else {
+		max_radius = get_dist_field(spheres, fld_sz, sq_len, 0, d_dist_fld);
+		float curr_r = get_dist_field(spheres, fld_sz, sq_len, 0.5, d_dist_fld_shift);
+        if (curr_r > max_radius) max_radius = curr_r;
+		h_dist = d_dist_fld;
+		h_dist_shift = d_dist_fld_shift;
+#ifdef DEBUG
+		dump_maps(h_dist, h_dist_shift);
+#endif
+	}
 
-
-    cudaSafeCall(cudaMalloc(&d_cells_cnt, sizeof(int)));
-//    cudaSafeCall(cudaMemset(d_cells_cnt, 0, sizeof(int)));
-
-    cudaSafeCall(cudaMemset(d_fld, 0, total_bytes));
-    cout << time_from_start() << ": overlapping... ";
-
-    get_overlapping_field <<<dim_grid_over, dim_block_over>>>
-    (d_fld, d_spheres, spheres_cnt, radius, fld_size.z, cell_len, ints_per_line, ints_per_layer,
-    iter_map.shift);
-    cudaSafeCall(cudaDeviceSynchronize());
-    cout << time_from_start() << ": Done\n";
-	cout << "In fuction was set: " << fld_bit_cnt(d_fld, total_ints) << endl;
-	xor_fields <<<dim_grid_help, dim_block_help>>> (d_fld, d_centers_fld, d_fld, total_ints);
-    cudaSafeCall(cudaDeviceSynchronize());
-	cout << "After xoring: " << fld_bit_cnt(d_fld, total_ints) << endl;
-	/*if (radius*2 > 155)
+	for (double curr_d = maxPores; curr_d >= minPores; curr_d -= h)
 	{
-		cout << "Disable me! Dumping centers\n";
-		int * dump = new int[total_ints];
-		cudaSafeCall(cudaMemcpy(dump, d_fld, total_bytes, cudaMemcpyDeviceToHost));
-		FILE * dump_file = fopen("dump_centers.dmp", "wb");
-		fwrite(dump, sizeof(int), total_ints, dump_file);
-		fclose(dump_file);
-		delete [] dump;
-		cout << "Dumped\n";
-	}*/
-    cout << time_from_start() << ": start apply map... ";
-    apply_map <<<dim_grid_map, dim_block_map>>> (d_fld, result_fld, iter_map, ints_per_line, ints_per_layer);
-    cudaSafeCall(cudaDeviceSynchronize());
-    cout << time_from_start() << ": Done\n";
-	result = fld_bit_cnt(result_fld, total_ints);
-	cout << "In result fld setted: " << result << endl;
-    or_fields <<<dim_grid_help, dim_block_help>>> (d_fld, d_centers_fld, d_centers_fld, total_ints);
-    cudaSafeCall(cudaDeviceSynchronize());
-    /*cout << time_from_start() << ": counting... " ;
-    cudaSafeCall(cudaMemset(d_cells_cnt, 0, sizeof(int)));
-	cudaSafeCall(cudaDeviceSynchronize());
-    fld_cnt <<<dim_grid_map, dim_block_map>>> (result_fld, start_point, stop_point, d_cells_cnt);
-    cudaSafeCall(cudaDeviceSynchronize());
-    cout << time_from_start() << ": Done\n";
-
-    cudaSafeCall(cudaMemcpy(&result, d_cells_cnt, sizeof(int), cudaMemcpyDeviceToHost));
-	cudaSafeCall(cudaDeviceSynchronize());
-*/
-	cout << "Result: " << result << endl;
-    cudaSafeCall(cudaFree(d_cells_cnt));
-    cudaSafeCall(cudaFree(iter_map.x));
-    cudaSafeCall(cudaFree(iter_map.y));
-    cudaSafeCall(cudaFree(iter_map.z));
-
-    return result;
-}
-
-double getVolume(const SphereVec & h_spheres, const Rect & box, double poreSize, double sq_len)
-{
-    static dCoord zero_pnt;
-    static iCoord fld_size;
-    static dim3 fld_dim;
-    static dCoord scale;
-    int divCnt = ceil(poreSize/sq_len);
-    
-    static size_t prev_cells_cnt = 0;
-    static int * result_fld = NULL;
-    static int * centers_fld = NULL;
-    static int * curr_centers_fld = NULL;
-    static float4 * d_spheres = NULL;
-    static dim3 start_point, stop_point;
-    static char * result_filename = new char[256];
-    
-    double radius = poreSize/2.0;
-    printf("Division count = %d\n", divCnt);
-	int gpu_points = 27 * h_spheres.size();
-
-    if (result_fld == NULL) {
-        // first launch
-        size_t total_bits = 1;
-        for (int dim = 0; dim < iCoord::GetDefDims(); ++dim) {
-            fld_size[dim] = (int)((box.maxCoord[dim] - box.minCoord[dim]) / sq_len + 1);
-            zero_pnt[dim] = box.minCoord[dim];
-            scale[dim] = sq_len;
+		double radius = curr_d/2;
+        if (radius > max_radius) {
+            res_psd.push_back(0);
+            continue;
         }
-
-        int ignore = (int) poreSize/sq_len/2.0;
-        stop_point.x = fld_size[0] - ignore;
-
-        fld_size[0] = iAlignUp(fld_size[0], 32);
-
-        fld_dim.x = fld_size[0];
-        fld_dim.y = fld_size[1];
-        fld_dim.z = fld_size[2];
-
-		cout << "Fld size: " << fld_size << endl;
-
-        for (int dim = 0; dim < iCoord::GetDefDims(); ++dim) {
-            total_bits *= fld_size[dim];
-        }
-
-        start_point.x = ignore;
-        start_point.y = ignore;
-        start_point.z = ignore;
-
-        stop_point.y = fld_dim.y - ignore;
-        stop_point.z = fld_dim.z - ignore;
-
-        scale[iCoord::GetDefDims()] = 1; // scale of radius
-        size_t total_bytes = (size_t)total_bits/8;
-        cout << "Need memory: " << total_bytes * 3 << endl;
-        cudaSafeCall(cudaMalloc(&result_fld, total_bytes));
-        cudaSafeCall(cudaMemset(result_fld, 0, total_bytes));
-		//init_centers_fld(result_fld, fld_dim);
-		//prev_cells_cnt = fld_bit_cnt(result_fld, total_bytes/4);
-        cudaSafeCall(cudaMalloc(&centers_fld, total_bytes));
-		cudaSafeCall(cudaMemset(centers_fld, 0, total_bytes));
-		//init_centers_fld(centers_fld, fld_dim);
-        cudaSafeCall(cudaMalloc(&curr_centers_fld, total_bytes));
-        cudaSafeCall(cudaMemcpy(curr_centers_fld, centers_fld, total_bytes, cudaMemcpyDeviceToDevice));
-
-        // send to GPU
-		// make periodic conditions 
-		// in that case we have 27 times more points
-		// it's bad, but let's try
-		// moreover we can optimize it later
-		// TODO: make personal array of points for each block
-		
-        float4 * h_spheres_floats = new float4[gpu_points];
-		Indexer shifts(vector<int>(3, 3));
-		int floats_idx = 0;
-
-        for (int i = 0; i < h_spheres.size(); ++i)
-        {
-			while (!shifts.is_last())
-			{
-				vector<int> curr_shifts = shifts.curr();
-				for (vector<int>::iterator sh = curr_shifts.begin(); sh != curr_shifts.end(); ++sh)
-				{
-					*sh -= 1;
-				}
-				h_spheres_floats[floats_idx++] = make_float4(curr_shifts[0] * box.maxCoord[0] + h_spheres[i][0],
-					curr_shifts[1] * box.maxCoord[1] + h_spheres[i][1], 
-					curr_shifts[2] * box.maxCoord[2] + h_spheres[i][2], h_spheres[i][3]);
-				shifts.next();
-			}
-			shifts.to_begin();
-        }
-		if (floats_idx != gpu_points)
-		{
-			std::cerr << "Strange floats cnt: " << floats_idx << " ins " << gpu_points << endl;
-			exit(40);
+		int divCnt;
+		CoordVec * curr_map = generate_host_map(radius, sq_len, divCnt);
+#ifdef RUN_DEVICE
+		if (divCnt % 2 == 0) {
+			mark_map(d_dist_fld, curr_map, radius, fld_sz, result);
 		}
-        cudaSafeCall(cudaMalloc(&d_spheres, gpu_points * sizeof(float4)));
-        cudaSafeCall(cudaMemcpy(d_spheres, h_spheres_floats, gpu_points * sizeof(float4), 
-                    cudaMemcpyHostToDevice));
-        delete [] h_spheres_floats;
-        sprintf(result_filename, "psd_%d.txt", rand());
-    }
-    
-    int cells_cnt = iteration(d_spheres, gpu_points, curr_centers_fld, centers_fld, 
-                                fld_dim, radius, sq_len, result_fld, 
-                                start_point, stop_point);
+		else {
+			mark_map(d_dist_fld_shift, curr_map, radius, fld_sz, result);
+		}
+#else
+		if (divCnt % 2 == 0) {
+			mark_map(h_dist_fld, curr_map, radius, fld_sz, result);
+		} else {
+			mark_map(h_dist_fld_shift, curr_map, radius, fld_sz, result);
+		}
+#endif
 
-	ofstream fout(result_filename, ios_base::app);
-	fout << radius*2 << '\t' << cells_cnt << endl;
-	fout.close();
-    cout << "Result written in " << result_filename << endl;
-    double one_cell_vol = pow(sq_len, iCoord::GetDefDims());
+		int curr_cnt = 0;
+#ifdef RUN_DEVICE
+		thrust::device_ptr<char> dev_ptr(result);
+		curr_cnt = thrust::count(dev_ptr, dev_ptr + fld_elements, (char)1);
+#else
+		vector<char> host_vec(result, result + fld_elements);
+		curr_cnt = thrust::count(host_vec.begin(), host_vec.end(), (char)1);
+#endif
+		res_psd.push_back(curr_cnt);
+		cout << "For radius " << radius << " occupied " << curr_cnt << " cells\n";
+		delete curr_map;
+	}
 
-    int added_cells_cnt = cells_cnt - prev_cells_cnt;
-    prev_cells_cnt = cells_cnt;
-    return added_cells_cnt * one_cell_vol;
-}
+#ifdef RUN_DEVICE
+	cudaSafeCall(cudaFree(result));
+#else
+	delete [] result;
+#endif
+	result = NULL;
 
-vector<double> getDistribution(const SphereVec & spheres, double minPores, double maxPores, double h, int divisions,
-                                double field_size)
-{
-    Rect box;
-    for (int dim = 0; dim < iCoord::GetDefDims(); ++dim) {
-        box.minCoord[dim] = 0;
-        box.maxCoord[dim] = field_size;
-    }
-    
-    vector<double> result;
-    double sq_len = min(h, minPores/divisions);
-    
-    vector<double> poreSizes;
-    for (double poreSize = minPores; poreSize <= maxPores; poreSize += h) {
-        poreSizes.push_back(poreSize);
-    }
-    for (int poreSizeIdx = poreSizes.size()-1; poreSizeIdx >= 0; --poreSizeIdx) {
-        cout << time_from_start() << ": For pore size " << poreSizes[poreSizeIdx] << endl;
-        result.push_back(getVolume(spheres, box, poreSizes[poreSizeIdx], sq_len));
+	int max_fill = thrust::count_if(d_dist_fld_shift.begin(), d_dist_fld_shift.end(), gt<float>(sq_len / 2));
+	res_psd.push_back(max_fill);
+	cout << "Max filling: " << max_fill << endl;
 
-        cout << time_from_start() << ": Result: " << result.back() << endl;
-    }
-    return result;
+	cout << "Final results:\n";
+	for (size_t pore_idx = res_psd.size(); pore_idx != 0; pore_idx--)
+	{
+		cout << res_psd[pore_idx-1]/(double)fld_elements << endl;
+	}
+
 }
 
 bool exists(const char *fname)
@@ -734,13 +652,14 @@ void load_coords(const char * filename, SphereVec * v)
     cout << v->size() << " points added\n";
 }
 
+#define TEST_DIST_FIELD
+
 int main(int argc, char ** argv)
 {
     iCoord::SetDefDims(3);
     dCoord::SetDefDims(iCoord::GetDefDims()+1);
     Coord<size_t>::SetDefDims(iCoord::GetDefDims());
     SphereVec v;
-    cout << "Profiled version\n";
     srand(time(NULL));
 	/*int my_argc = 5;
 	char ** my_argv = new char *[my_argc];
@@ -757,8 +676,6 @@ int main(int argc, char ** argv)
 	int plan_error = plan.Init(argc, argv);
 	if (plan_error)
 	{
-		int i;
-		scanf("%d", &i);
 		return plan_error;
 	}
 	int divisions = plan.divisions;
@@ -770,14 +687,9 @@ int main(int argc, char ** argv)
     } else {
         load_coords<double>(plan.filename, &v);
     }
-    
-	vector<double> distr = getDistribution(v, plan.min_r, plan.max_r, plan.step, divisions, plan.field_size);
-    for (vector<double>::reverse_iterator curr_d = distr.rbegin(); curr_d != distr.rend(); ++curr_d) {
-        cout << *curr_d << " ";
-    }
-    cout << endl;
-//	int prevent_exit = 0;
-//    std::cin >> prevent_exit;
+
+    getDistribution(v, plan.min_r, plan.max_r, plan.step, divisions, plan.field_size, plan.maps_fn);
+
 	return 0;
 }
 

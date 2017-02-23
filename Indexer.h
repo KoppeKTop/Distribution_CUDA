@@ -10,7 +10,9 @@
 #define _INDEXER_H_
 
 #include <vector>
+#include <cstddef>
 using std::vector;
+using std::size_t;
 
 class Indexer {
 public:
