@@ -497,7 +497,7 @@ void getDistribution(const SphereVec & spheres, double minPores, double maxPores
 	thrust::device_vector<float> d_dist_fld(fld_elements);
 	thrust::device_vector<float> d_dist_fld_shift(fld_elements);
 	thrust::host_vector<float>  h_dist, h_dist_shift;
-    float max_radius = 0;
+	float max_radius = 0;
 	if (maps_fn.length() > 1) {
 		max_radius = load_maps(maps_fn.c_str(), h_dist, h_dist_shift);
 		d_dist_fld = h_dist;
@@ -505,7 +505,7 @@ void getDistribution(const SphereVec & spheres, double minPores, double maxPores
 	} else {
 		max_radius = get_dist_field(spheres, fld_sz, sq_len, 0, d_dist_fld);
 		float curr_r = get_dist_field(spheres, fld_sz, sq_len, 0.5, d_dist_fld_shift);
-        if (curr_r > max_radius) max_radius = curr_r;
+		if (curr_r > max_radius) max_radius = curr_r;
 		h_dist = d_dist_fld;
 		h_dist_shift = d_dist_fld_shift;
 #ifdef DEBUG
@@ -564,9 +564,9 @@ void getDistribution(const SphereVec & spheres, double minPores, double maxPores
 	cout << "Final results:\n";
 	for (size_t pore_idx = res_psd.size(); pore_idx != 0; pore_idx--)
 	{
-		cout << res_psd[pore_idx-1]/(double)fld_elements << endl;
+		cout << res_psd[pore_idx-1]/(double)fld_elements << '\t';
 	}
-
+	cout << endl;
 }
 
 bool exists(const char *fname)
