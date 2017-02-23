@@ -628,8 +628,6 @@ void load_coords(const char * filename, SphereVec * v)
     cout << v->size() << " points added\n";
 }
 
-#define TEST_DIST_FIELD
-
 int main(int argc, char ** argv)
 {
     iCoord::SetDefDims(3);
