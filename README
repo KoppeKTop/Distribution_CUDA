@@ -1,0 +1,2 @@
+# complie with:
+cd src && /usr/local/cuda-8.0/bin/nvcc --std=c++11 --cudart static --relocatable-device-code=false -gencode arch=compute_20,code=compute_20 -gencode arch=compute_20,code=sm_20 -link -I../include kernel.cu Indexer.cpp -o ~/Distribution_CUDA/distr_cuda
