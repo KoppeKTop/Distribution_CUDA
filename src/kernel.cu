@@ -335,30 +335,6 @@ void mark_map(const thrust::host_vector<float> & distances, const CoordVec * cur
 }
 
 
-__global__ void xor_fields(int * fld1, int * fld2, int * dest, int cnt)
-{
-    int idx = threadIdx.x + blockIdx.x * blockDim.x;
-    if (idx < cnt)
-        dest[idx] = fld1[idx] ^ fld2[idx];
-}
-
-__global__ void or_fields(int * fld1, int * fld2, int * dest, int cnt)
-{
-    int idx = threadIdx.x + blockIdx.x * blockDim.x;
-    if (idx < cnt)
-        dest[idx] = fld1[idx] | fld2[idx];
-}
-
-struct Map
-{
-    /* data */
-    short * x;
-    short * y;
-    short * z;
-    int cnt;
-    float shift;
-};
-
 bool is_overlapped(const dCoord & sph1, const dCoord & sph2)
 {
     float r_sum = SQR(float(sph1[3] + sph2[3]));
